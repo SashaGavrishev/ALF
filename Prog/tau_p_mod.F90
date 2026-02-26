@@ -272,8 +272,9 @@
         ! and perform the standard Wrapur + CGRP check there.
         ! For Langevin/HMC the tail loop below already performs this check, so the
         ! fallback is restricted to the standard sequential update path.
-        ! Note: the measurement loop's last iteration already applied PROPRM1/PROPR at
-        ! NT1 = Ltrot-Thtrot+1, so the propagation here starts at Ltrot-Thtrot+2.
+        ! Note: after the measurement loop's last iteration, GTTUP has already been
+        ! propagated to time slice Ltrot-Thtrot+1, so the propagation here starts at
+        ! Ltrot-Thtrot+2.
         If ( NCHECK == 0 .and. &
              & str_to_upper(Langevin_HMC%get_Update_scheme()) /= "LANGEVIN" .and. &
              & str_to_upper(Langevin_HMC%get_Update_scheme()) /= "HMC" ) Then
