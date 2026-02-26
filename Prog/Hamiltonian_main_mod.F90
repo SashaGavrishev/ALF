@@ -378,8 +378,8 @@
                    write(output_unit,*) "WARNING:       Global_move produces T0_Proposal_ratio outside safe range!"
                    write(output_unit,*) "T0_Proposal_ratio = ", T0_Proposal_ratio
                    write(output_unit,*) "Safe range: [", min_safe_T0, ",", max_safe_T0, "]"
-                   write(output_unit,*) "This may cause numerical issues. Consider switching to the Global_move_log_T0"
-                   write(output_unit,*) "implementation to compute log(T0_Proposal_ratio) directly."
+                   write(output_unit,*) "This may cause numerical issues. Hamiltonian implementations should override"
+                   write(output_unit,*) "Global_move_log_T0 to compute log(T0_Proposal_ratio) directly in a numerically safe way."
                    write(output_unit,*) "Suppressing further warnings."
                    write(output_unit,*)
                    warning_printed = .True.
