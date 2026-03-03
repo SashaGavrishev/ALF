@@ -126,7 +126,7 @@ contains
      end function F_QFI_pp
 
 !--------------------------------------------------------------------------------------------------------
-! This function sets Ra, ba as defined in Karrasch's paper Karrasch of  Phys. Rev. B 82 (2010), 125114. 
+! This function sets Ra, ba as defined in Karrasch's paper  Phys. Rev. B 82 (2010), 125114. 
 !--------------------------------------------------------------------------------------------------------
      Subroutine Set_Ra_ba(N)
       Implicit None
@@ -200,7 +200,7 @@ contains
       if (allocated(ba)) deallocate(ba)
    end Subroutine clean_Set_Ra_ba
 !--------------------------------------------------------------------------------------------------------
-! Computes Fermi function using the parameters Ra and ba. It is based on the work of Karrasch of  Phys. Rev. B 82 (2010), 125114.
+! Computes Fermi function using the parameters Ra and ba. It is based on the work of Karrasch:  Phys. Rev. B 82 (2010), 125114.
 !--------------------------------------------------------------------------------------------------------
    function fermi_para(x) result (f) 
       Implicit none 
@@ -218,7 +218,7 @@ contains
    end function fermi_para
 !--------------------------------------------------------------------------------------------------------
 ! This function computes  DI/DV  from the single particle spectral function.  It is based on the work of 
-! Karrasch of  Phys. Rev. B 82 (2010), 125114.
+! Karrasch:  Phys. Rev. B 82 (2010), 125114.
      function F_DIDV(om, beta) result(F)
    
       Implicit None
@@ -246,7 +246,7 @@ contains
 
 !--------------------------------------------------------------------------------------------------------
 ! This function computes  DI/DV  from the single particle spectral function.  It is based on the work of 
-! Karrasch of  Phys. Rev. B 82 (2010), 125114.
+! Karrasch:  Phys. Rev. B 82 (2010), 125114.
      function F_DIDV_PH(om, beta) result(F)
    
       Implicit None

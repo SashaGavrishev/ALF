@@ -486,7 +486,7 @@ Fermi function is approximated by:
   f(x) - \frac{1}{2} = - \sum_{\alpha =1 }^{N/2} \left( \frac{R_\alpha}{x - i/ b_\alpha} + \frac{R_\alpha}{x + i /b_\alpha} \right).
 \end{equation} 
 For this parametrization, it turns out  that truncating the sum to five terms provides an extremely good approximation  for $|x|<20$.  
-In  the MaxEnt wrapper \texttt{Max\_SAC.F90}  the call to the routine \texttt{Set\_Ra\_ba(N)} sets the parameters $R_\alpha$ and $b_\alpha$ for the approximation of the Fermi function (see Ref.~\cite{Karrasch10}).  The default value of $N$ is set to ten  resulting in the aformentioned truncation, but the user can change it to improve the approximation for larger values of $|x|$.   With the above,  one  can estimate:
+In  the MaxEnt wrapper \texttt{Max\_SAC.F90}  the call to the routine \texttt{Set\_Ra\_ba(N)} sets the parameters $R_\alpha$ and $b_\alpha$ for the approximation of the Fermi function (see Ref.~\cite{Karrasch10}).  The default value of $N$ is set to ten  resulting in the aforementioned truncation, but the user can change it to improve the approximation for larger values of $|x|$.   With the above,  one  can estimate:
 \begin{equation}
    \left. \frac{\partial I}{\partial V}\right|_{V=0}  = \int d \omega A(\omega) \left[ -\frac{2}{\beta} 
    \sum_{\alpha>0}  R_\alpha \Re \frac{1}{(i/(\beta b_\alpha) - \omega)^2} \right] 
