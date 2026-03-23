@@ -21,7 +21,7 @@ jobs:
     container:
       image: aergus/latex
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - name: Build PDF with latexmk
         working-directory: Documentation
         run: latexmk -pdf doc.tex
@@ -36,7 +36,7 @@ jobs:
     name: Generate Doxygen HTML
     runs-on: ubuntu-slim
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - name: Install doxygen and graphviz
         run: sudo apt-get update && sudo apt-get install -y doxygen graphviz
       - name: Run Doxygen

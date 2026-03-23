@@ -14,7 +14,7 @@ jobs:
     name: Lint Fortran STOP statements
     runs-on: ubuntu-slim
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - name: Check for forbidden STOP/ERROR STOP
         run: |
           set -euo pipefail
@@ -45,7 +45,7 @@ jobs:
     container:
       image: ghcr.io/alf-qmc/alf-container/alf-requirements/${{ matrix.image_minor[0] }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - uses: ./.github/actions/alf_test
         with:
           args: ${{ matrix.image_minor[1] }} ${{ matrix.mode }} ${{ matrix.devel }} ${{ matrix.config }}
@@ -60,7 +60,7 @@ jobs:
         devel: ["Devel"]
         config: ["HDF5"]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - uses: ./.github/actions/alf_test
         with:
           args: GNU ${{ matrix.mode }} ${{ matrix.devel }} ${{ matrix.config }}
@@ -74,7 +74,7 @@ jobs:
     container:
       image: ghcr.io/alf-qmc/alf-container/alf-requirements/trixie
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - name: Run Valgrind
         shell: bash
         run: |
