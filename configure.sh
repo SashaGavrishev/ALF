@@ -6,12 +6,15 @@ USAGE="usage 'source configure.sh MACHINE MODE STAB'
 
 Please choose one of the following MACHINEs:
  * GNU
+ * Cedar
  * Intel
  * IntelLLVM or IntelX
  * PGI
  * SuperMUC-NG
  * JUWELS
  * FRITZ
+ * PKS
+ * RAVEN
 Possible MODEs are:
  * MPI (default)
  * noMPI
@@ -26,10 +29,10 @@ Possible STABs are:
 Further optional arguments: 
   Devel: Compile with additional flags for development and debugging
   HDF5: Compile with HDF5
-  NO-INTERACTIVE: Do not ask for user confirmation during excution of this script
+  NO-INTERACTIVE: Do not ask for user confirmation during execution of this script
   NO-FALLBACK: Do not use a fallback option in case of an unknown/no machine,
                but instead return with value 1
-To hand an additional flag to the compiler, export it in the varible ALF_FLAGS_EXT prior to sourcing this script.
+To hand an additional flag to the compiler, export it in the variable ALF_FLAGS_EXT prior to sourcing this script.
 
 ALF usually self-compiles HDF5 and stores the library in subdirectories of ALF/HDF5.
 This behavior can be changed by setting the environment variable ALF_HDF5_DIR.
@@ -37,7 +40,6 @@ This behavior can be changed by setting the environment variable ALF_HDF5_DIR.
 For more details check the documentation.\n"
 
 STABCONFIGURATION=""
-# STABCONFIGURATION="${STABCONFIGURATION} -DQRREF"
 
 export ALF_DIR="$PWD"
 
@@ -91,7 +93,6 @@ set_hdf5_flags()
   INC_HDF5="-I$HDF5_DIR/include"
   LIB_HDF5="-L$HDF5_DIR/lib $HDF5_DIR/lib/libhdf5hl_fortran.a $HDF5_DIR/lib/libhdf5_hl.a"
   EXTRA_LIBRARIES="$("$HDF5_DIR"/bin/h5fc -showconfig | grep 'Extra libraries:' | cut -f2 -d':')"
-  # EXTRA_LIBRARIES="-lz -ldl -lm"
   LIB_HDF5="$LIB_HDF5 $HDF5_DIR/lib/libhdf5_fortran.a $HDF5_DIR/lib/libhdf5.a $EXTRA_LIBRARIES -Wl,-rpath -Wl,$HDF5_DIR/lib"
 
   if ! "$HDF5_DIR/bin/h5fc" -showconfig | grep "deflate(zlib)" > /dev/null; then
@@ -140,9 +141,6 @@ check_python()
 find_mkl_flag()
 {
   if command -v ifort > /dev/null; then
-    # default optimization flags for Intel compiler
-    ifort_major=2000
-    ifort_minor=0
     ifort_major=$(ifort --version | head -n 1 | awk '{print $(NF - 1)}' | cut -d '.' -f 1)
     ifort_minor=$(ifort --version | head -n 1 | awk '{print $(NF - 1)}' | cut -d '.' -f 2)
     if [ "$ifort_major" -gt 2021 ] || { [ "$ifort_major" -eq 2021 ] && [ "$ifort_minor" -gt 3 ]; }; then
@@ -184,16 +182,12 @@ set_intelcxx()
 }
 
 # default optimization flags for Intel compiler
-INTELOPTFLAGS="-cpp -O3 -fp-model fast=2 -xHost -unroll -finline-functions -ipo -ip -heap-arrays 1024 -no-wrap-margin"
-# INTELOPTFLAGS="-cpp -O3 "
-#INTELOPTFLAGS="$INTELOPTFLAGS -traceback"
-# uncomment the next line if you want to use additional openmp parallelization
+INTELOPTFLAGS="-cpp -O3 -fp-model fast=2 -xHost -unroll -finline-functions -ipo -ip -heap-arrays 1024 -no-wrap-margin -diag-disable=5268,10448,5462"
 INTELOPTFLAGS="${INTELOPTFLAGS} -parallel -qopenmp"
 INTELDEVFLAGS="-warn all -check all -g -traceback"
 INTELUSEFULFLAGS="-std08"
 
-INTELLLVMOPTFLAGS="-cpp -O3"
-INTELLLVMOPTFLAGS="-cpp -O3 -fp-model=fast=2 -no-prec-div -static -xHost -unroll -finline-functions -no-wrap-margin"
+INTELLLVMOPTFLAGS="-cpp -O3 -fp-model=fast=2 -no-prec-div -static -xHost -unroll -finline-functions -no-wrap-margin -diag-disable=5268,10448,5462"
 # uncomment the next line if you want to use additional openmp parallelization
 # INTELLLVMOPTFLAGS="${INTELLLVMOPTFLAGS} -qopenmp"
 INTELLLVMDEVFLAGS="-warn all -check all,nouninit -g -traceback"
@@ -202,11 +196,8 @@ INTELLLVMUSEFULFLAGS="-std08"
 
 # default optimization flags for GNU compiler
 GNUOPTFLAGS="-cpp -O3 -ffree-line-length-none -ffast-math"
-#GNUOPTFLAGS="-cpp -O0 -ffree-line-length-none"
-# uncomment the next line if you want to use additional openmp parallelization
 GNUOPTFLAGS="${GNUOPTFLAGS} -fopenmp"
-# GNUDEVFLAGS="-Wconversion -Werror -fcheck=all -ffpe-trap=invalid,zero,overflow,underflow,denormal"
-GNUDEVFLAGS="-Wconversion -Werror -Wno-error=cpp -fcheck=all -g -fbacktrace -fmax-errors=10"
+GNUDEVFLAGS="-Wconversion -Werror -Wno-error=cpp -fcheck=all -g -fbacktrace -fmax-errors=10 -O0 -ggdb"
 GNUUSEFULFLAGS="-std=f2008"
 
 # default optimization flags for PGI compiler
@@ -248,7 +239,6 @@ while [ "$#" -gt "0" ]; do
       HDF5_ENABLED="1"
     ;;
     DEVEL|DEVELOPMENT)
-      #DEVEL="1"
       GNUOPTFLAGS="$GNUOPTFLAGS $GNUDEVFLAGS"
       INTELOPTFLAGS="$INTELOPTFLAGS $INTELDEVFLAGS"
       INTELLLVMOPTFLAGS="$INTELLLVMOPTFLAGS $INTELLLVMDEVFLAGS"
@@ -287,7 +277,11 @@ case $MODE in
     printf "This requires also MPI parallization which is set as well.\n"
     PROGRAMMCONFIGURATION="-DMPI -DTEMPERING"
     INTELCOMPILER="mpiifort"
-    INTELLLVMCOMPILER="mpiifort -fc=ifx"
+    if command -v mpiifx > /dev/null; then
+       INTELLLVMCOMPILER="mpiifx"
+    else
+       INTELLLVMCOMPILER="mpiifort -fc=ifx"
+    fi
     GNUCOMPILER="mpifort"
     MPICOMP=1
   ;;
@@ -296,7 +290,11 @@ case $MODE in
     printf "Activating MPI parallization.\n"
     PROGRAMMCONFIGURATION="-DMPI"
     INTELCOMPILER="mpiifort"
-    INTELLLVMCOMPILER="mpiifort -fc=ifx"
+    if command -v mpiifx > /dev/null; then
+       INTELLLVMCOMPILER="mpiifx"
+    else
+       INTELLLVMCOMPILER="mpiifort -fc=ifx"
+    fi
     GNUCOMPILER="mpifort"
     MPICOMP=1
   ;;
@@ -306,7 +304,11 @@ case $MODE in
     printf "This requires also MPI parallization which is set as well.\n"
     PROGRAMMCONFIGURATION="-DMPI -DTEMPERING -DPARALLEL_PARAMS"
     INTELCOMPILER="mpiifort"
-    INTELLLVMCOMPILER="mpiifort -fc=ifx"
+    if command -v mpiifx > /dev/null; then
+       INTELLLVMCOMPILER="mpiifx"
+    else
+       INTELLLVMCOMPILER="mpiifort -fc=ifx"
+    fi
     GNUCOMPILER="mpifort"
     MPICOMP=1
   ;;
@@ -338,7 +340,7 @@ case $STAB in
 
   STAB3)
     STABCONFIGURATION="${STABCONFIGURATION} -DSTAB3"
-    printf "Using newest stabilization which seperates large and small scales\n"
+    printf "Using newest stabilization which separates large and small scales\n"
   ;;
 
   LOG)
@@ -355,6 +357,8 @@ esac
 case $MACHINE in
   #GNU (as Hybrid code)
   GNU)
+    # -fallow-argument-mismatch was required by gfortran10 and MPICH, they changed default behaviour in v10
+    test $(gfortran -dumpversion) -gt 9 && GNUOPTFLAGS="${GNUOPTFLAGS} -fallow-argument-mismatch"
     F90OPTFLAGS="$GNUOPTFLAGS"
     F90USEFULFLAGS="$GNUUSEFULFLAGS"
     ALF_FC="$GNUCOMPILER"
@@ -389,6 +393,19 @@ case $MACHINE in
       set_intelcc
       set_intelcxx
       set_hdf5_flags "$INTELCC" ifx "$INTELCXX" || return 1
+    fi
+  ;;
+
+  #Cedar (as Hybrid code)
+  CEDAR)
+    F90OPTFLAGS="$INTELOPTFLAGS"
+    F90USEFULFLAGS="$INTELUSEFULFLAGS"
+    ALF_FC="$INTELCOMPILER"
+    LIB_BLAS_LAPACK="$INTELMKL"
+    if [ "${HDF5_ENABLED}" = "1" ]; then
+       INC_HDF5="-I$HDF5_DIR/include"
+       LIB_HDF5="-L$HDF5_DIR/lib $HDF5_DIR/lib/libhdf5hl_fortran.a $HDF5_DIR/lib/libhdf5_hl.a"
+       LIB_HDF5="$LIB_HDF5 $HDF5_DIR/lib/libhdf5_fortran.a $HDF5_DIR/lib/libhdf5.a -lz -ldl -lm -Wl,-rpath -Wl,$HDF5_DIR/lib  -lsz"
     fi
   ;;
 
@@ -437,7 +454,7 @@ case $MACHINE in
     ALF_FC="mpiifort"
     find_mkl_flag || return 1
     LIB_BLAS_LAPACK="${INTELMKL}"
-    LIB_HDF5="–lh5df_fortran"
+    LIB_HDF5="-lhdf5_fortran"
     INC_HDF5=""
   ;;
 
@@ -458,16 +475,55 @@ case $MACHINE in
       set_hdf5_flags "$INTELCC" ifort "$INTELCXX" || return 1
     fi
   ;;
+
+  #IntelX for PKS cluster
+  PKS)
+    module load intel/umf
+    module load intel/compiler-rt
+    module load intel/tbb
+    module load intel/compiler
+    module load intel/mkl
+    module load intel/mpi
+    F90OPTFLAGS="${INTELLLVMOPTFLAGS/-xHost/-march=core-avx2}"
+    F90USEFULFLAGS="$INTELLLVMUSEFULFLAGS"
+    ALF_FC="$INTELLLVMCOMPILER"
+    LIB_BLAS_LAPACK="-qmkl"
+    if [ "${HDF5_ENABLED}" = "1" ]; then
+      set_intelcc
+      set_intelcxx
+      set_hdf5_flags "$INTELCC" ifx "$INTELCXX" || return 1
+    fi
+  ;;
+
+  #Raven
+  RAVEN)
+    module purge
+    module load intel/2025.2
+    module load impi/2021.16
+    module load hdf5-serial/1.12.2
+    module load mkl/2025.2
+    F90OPTFLAGS="${INTELLLVMOPTFLAGS/-xHost/-xCORE-AVX512 -qopt-zmm-usage=high}"
+    F90USEFULFLAGS="$INTELLLVMUSEFULFLAGS"
+    ALF_FC="$INTELLLVMCOMPILER"
+    find_mkl_flag || return 1
+    LIB_BLAS_LAPACK="${INTELMKL} -static-intel"
+    if [ "${HDF5_ENABLED}" = "1" ]; then
+      INC_HDF5="-I$HDF5_HOME/include"
+      LIB_HDF5="-L$HDF5_HOME/lib $HDF5_HOME/lib/libhdf5hl_fortran.a $HDF5_HOME/lib/libhdf5_hl.a"
+      LIB_HDF5="$LIB_HDF5 $HDF5_HOME/lib/libhdf5_fortran.a $HDF5_HOME/lib/libhdf5.a -lz -ldl -lm -Wl,-rpath -Wl,$HDF5_HOME/lib"
+    fi
+  ;;
+  
   #Default (unknown machine)
   *)
     if [ "$NO_FALLBACK" = "1" ]; then
-      printf "${RED}  !!     UNKNOW MACHINE     !!${NC}\n" 1>&2
+      printf "${RED}  !!     UNKNOWN MACHINE     !!${NC}\n" 1>&2
       printf "${RED}  !!  exiting configure.sh  !!${NC}\n" 1>&2
       return 1
     fi
     printf "\n" 1>&2
     printf "${RED}   !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!${NC}\n" 1>&2
-    printf "${RED}   !!               UNKNOW MACHINE               !!${NC}\n" 1>&2
+    printf "${RED}   !!               UNKNOWN MACHINE               !!${NC}\n" 1>&2
     printf "${RED}   !!         IGNORING PARALLEL SETTINGS         !!${NC}\n" 1>&2
     printf "${RED}   !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!${NC}\n" 1>&2
     printf "\n" 1>&2
@@ -476,6 +532,8 @@ case $MACHINE in
     printf "$USAGE"
     PROGRAMMCONFIGURATION=""
     F90OPTFLAGS="-cpp -O3 -ffree-line-length-none -ffast-math"
+    # -fallow-argument-mismatch was required by gfortran10 and MPICH, they changed default behaviour in v10
+    test $(gfortran -dumpversion) -gt 9 && F90OPTFLAGS="${F90OPTFLAGS} -fallow-argument-mismatch"
     F90USEFULFLAGS=""
 
     ALF_FC="gfortran"
@@ -492,9 +550,14 @@ check_python || return 1
 
 PROGRAMMCONFIGURATION="$STABCONFIGURATION $PROGRAMMCONFIGURATION"
 
+if [ -n "${ALF_INC_EXT+x}" ]; then
+  printf "\nAppending additional include directory '%s'\n" "${ALF_INC_EXT}"
+fi
+
 Libs="$ALF_DIR/Libraries"
-ALF_INC="-I${Libs}/Modules"
-ALF_LIB="${Libs}/Modules/modules_90.a ${LIB_BLAS_LAPACK} ${Libs}/libqrref/libqrref.a"
+ALF_INC="-I${Libs}/Modules ${ALF_INC_EXT}"
+ALF_LIB="${Libs}/Modules/modules_90.a ${LIB_BLAS_LAPACK} ${Libs}/libqrref/libqrref.a ${ALF_LIB_EXT}"
+
 if [ "${HDF5_ENABLED}" = "1" ]; then
   echo; echo "HDF5 enabled"
   ALF_INC="${ALF_INC} ${INC_HDF5}"
@@ -505,7 +568,7 @@ fi
 export ALF_LIB
 
 export ALF_DIR
-export ALF_FC="$ALF_FC"
+export ALF_FC
 
 if [ -n "${ALF_FLAGS_EXT+x}" ]; then
   printf "\nAppending additional compiler flag '%s'\n" "${ALF_FLAGS_EXT}"
