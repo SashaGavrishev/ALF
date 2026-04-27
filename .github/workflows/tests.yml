@@ -2,6 +2,9 @@ name: "Tests"
 
 on:
   push:
+    branches:
+      - master
+      - development
   workflow_dispatch:
 
 concurrency:
@@ -12,7 +15,7 @@ concurrency:
 jobs:
   lint_stopcommands:
     name: Lint Fortran STOP statements
-    runs-on: ubuntu-slim
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
       - name: Check for forbidden STOP/ERROR STOP

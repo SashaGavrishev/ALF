@@ -1,0 +1,41 @@
+name: Sync with upstream
+
+on:
+  schedule:
+    - cron: '0 6 * * 1'  # Every Monday at 06:00 UTC
+  workflow_dispatch:
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Configure git
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+      - name: Fetch upstream
+        run: |
+          git remote add upstream https://github.com/ALF-QMC/ALF.git
+          git fetch upstream master
+
+      - name: Merge upstream
+        run: git merge upstream/master --no-commit --no-ff
+
+      - name: Restore fork-specific files
+        run: |
+          git checkout HEAD -- README.md CONTRIBUTING.md
+          git rm -f .github/workflows/doc.yml \
+                     .github/workflows/mirror.yml \
+                     .github/workflows/mirror-template.yml 2>/dev/null || true
+
+      - name: Commit
+        run: git diff --cached --quiet || git commit --no-edit
+
+      - name: Push
+        run: git diff origin/master..HEAD --quiet || git push origin master
