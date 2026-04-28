@@ -1,1 +1,19 @@
-Hamiltonian_*_read_write_parameters.F90
+# Ignore everything by default — symlinks to external Hamiltonians are excluded
+*
+
+# Tracked files
+!.gitignore
+!Bid_N2.F90
+!Bid_N2_0.F90
+!Bid_N3.F90
+!Bid_N4.F90
+!Hamiltonian_##NAME##_smod.F90
+!Hamiltonian_Hubbard_Plain_Vanilla_smod.F90
+!Hamiltonian_Hubbard_smod.F90
+!Hamiltonian_Kondo_smod.F90
+!Hamiltonian_LRC_smod.F90
+!Hamiltonian_Spin_Peierls_smod.F90
+!Hamiltonian_Z2_Matter_smod.F90
+!Hamiltonian_tV_smod.F90
+!LRC_mod.F90
+!Not_supported/
