@@ -72,9 +72,13 @@
 !> \endverbatim
 !> @param CPU_MAX Real
 !> \verbatim
-!>  Available Wallclock time. The program will carry as many bins as
-!>  possible during this time
-!>  If not specified the program will stop after NBIN bins are calculated
+!>  Available Wallclock time.
+!>  The run stops at whichever bound comes first: NBIN bins, or this
+!>  wallclock time. With NBIN <= 0 the wallclock time is the only bound and
+!>  the program carries as many bins as possible during it; with CPU_MAX not
+!>  specified NBIN is the only bound.
+!>  NOTE: this is a deliberate divergence from upstream ALF, where a non-zero
+!>  CPU_MAX always discards NBIN. See the set_NBin call in this file.
 !> \endverbatim
 !> @param Propose_S0 Logical
 !> \verbatim
@@ -181,7 +185,7 @@ Program Main
         CLASS(UDV_State), Dimension(:,:), ALLOCATABLE :: udvst
 
         ! For the truncation of the program:
-        logical                   :: prog_truncation, run_file_exists
+        logical                   :: prog_truncation, run_file_exists, NBin_bounded
         integer (kind=kind(0.d0)) :: count_bin_start, count_bin_end
         
         ! For MPI shared memory
@@ -407,7 +411,14 @@ Program Main
         endif
         Call Hop_mod_init
 
-        IF (ABS(get_CPU_MAX()) > Zero ) call set_NBin(10000000)
+        ! Deliberate divergence from upstream ALF, to re-apply after a merge:
+        ! upstream discards NBin whenever CPU_MAX is set, so a run always burns
+        ! its whole time budget. Gating the override on NBin being unset makes
+        ! the run stop at whichever bound comes first, so a checkpoint-restart
+        ! campaign can ask for an exact bin count and still stay inside its
+        ! allocation. NBin <= 0 keeps upstream's pure time-bounded behaviour.
+        NBin_bounded = get_NBin() > 0
+        IF (ABS(get_CPU_MAX()) > Zero .AND. .NOT. NBin_bounded ) call set_NBin(10000000)
         If (get_N_Global_tau() > 0) then
            Call Wrapgr_alloc
         endif
@@ -489,8 +500,15 @@ Program Main
 #endif
            Open (Unit = 50,file=file_info,status="unknown",position="append")
            Write(50,*) 'Sweeps                              : ', get_NSweep()
-           If ( abs(get_CPU_MAX()) < ZERO ) then
+           ! Both bounds are reported, since either can now stop the run first.
+           ! NBin_bounded, not get_NBin(), so the sentinel set above is never
+           ! printed as if it were a requested bin count.
+           If ( NBin_bounded ) then
               Write(50,*) 'Bins                                : ', get_NBin()
+           else
+              Write(50,*) 'No bin-number limitation '
+           endif
+           If ( abs(get_CPU_MAX()) < ZERO ) then
               Write(50,*) 'No CPU-time limitation '
            else
               Write(50,'(" Prog will stop after hours:",2x,F8.4)') get_CPU_MAX()
