@@ -361,6 +361,8 @@
            ! Local
            Integer :: Ns, Nt, no, no1, I, Ntau
            Complex (Kind=Kind(0.d0)), allocatable, target :: Tmp(:,:,:,:)
+           ! Contiguous copy of one Obs_Latt row; see the Fourier_R_to_K call below.
+           Complex (Kind=Kind(0.d0)), allocatable :: Obs_row(:)
            Real    (Kind=Kind(0.d0))              :: x_p(2)
            Complex (Kind=Kind(0.d0))              :: Sign_bin
            Character (len=64) :: File_pr,  File_suff, File_aux, tmp_str
@@ -406,6 +408,7 @@
            filename = File_h5
 #endif
            Allocate (Tmp(Ns, Ntau, Obs%Latt_unit%Norb, Obs%Latt_unit%Norb))
+           Allocate (Obs_row(Ns))
            Obs%Obs_Latt  = Obs%Obs_Latt /dble(Obs%N   )
            Obs%Obs_Latt0 = Obs%Obs_Latt0/dble(Obs%N*Ns*Ntau)
            Obs%Ave_sign  = Obs%Ave_Sign /dble(Obs%N   )
@@ -440,7 +443,15 @@
               do nt = 1, Ntau
                  do no = 1, Obs%Latt_unit%Norb
                     do no1 = 1, Obs%Latt_unit%Norb
-                       Call Fourier_R_to_K(Obs%Obs_Latt(:,nt,no,no1), Tmp(:,nt,no,no1), Obs%Latt)
+                       ! Obs_Latt is a pointer array, and gfortran 16 on
+                       ! arm64-darwin builds a bad descriptor for a section of
+                       ! one passed straight to an assumed-shape dummy, faulting
+                       ! before the callee is even entered. Materialising the
+                       ! row first sidesteps it; Tmp is allocatable and passes
+                       ! correctly, so only the input needs copying. The copy is
+                       ! O(Ns) against the transform's O(Ns^2), once per bin.
+                       Obs_row = Obs%Obs_Latt(:,nt,no,no1)
+                       Call Fourier_R_to_K(Obs_row, Tmp(:,nt,no,no1), Obs%Latt)
                     enddo
                  enddo
               enddo
