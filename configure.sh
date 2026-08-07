@@ -15,6 +15,8 @@ Please choose one of the following MACHINEs:
  * FRITZ
  * PKS
  * PKS_ZEN
+   (both accept ALF_ONEAPI_SETVARS=/path/to/setvars.sh or
+    ALF_INTEL_MODULES="mod1 mod2 ..." to override the Intel toolchain)
  * PKS_AOCC
  * PKS_GNU_ZEN
  * RAVEN
@@ -223,6 +225,49 @@ set_aocl_flags()
   done
   printf "${RED}Warning: no AOCL root found in AOCL_ROOT/AOCL_DIR/AOCL_HOME;${NC}\n" 1>&2
   printf "${RED}  relying on the module's own search paths for %s${NC}\n" "$AOCL_BLAS_LAPACK" 1>&2
+}
+
+# Put an Intel toolchain on PATH for the PKS machine cases, and report which one.
+# Three ways, in precedence order, so a newer compiler installed on the cluster
+# can be used before the module system defaults to it:
+#
+#   ALF_ONEAPI_SETVARS=/path/to/oneapi/setvars.sh   source an install directly
+#   ALF_INTEL_MODULES="intel/compiler/2026.0 ..."   load these modules instead
+#   (neither)                                       the cluster's usual defaults
+#
+# Reports the resolved ifx version either way: which compiler you got decides
+# which -march targets exist (best_march), and that is worth seeing rather than
+# inferring from a build failure.
+load_intel_env()
+{
+  if [ -n "${ALF_ONEAPI_SETVARS:-}" ]; then
+    if [ ! -r "${ALF_ONEAPI_SETVARS}" ]; then
+      printf "${RED}\n==== Error: ALF_ONEAPI_SETVARS=%s is not readable ====${NC}\n\n" \
+        "${ALF_ONEAPI_SETVARS}" 1>&2
+      return 1
+    fi
+    printf "\nSourcing oneAPI from %s\n" "${ALF_ONEAPI_SETVARS}"
+    # --force: setvars refuses to re-run if a oneAPI is already in the
+    # environment, which is exactly the case being overridden here.
+    . "${ALF_ONEAPI_SETVARS}" --force > /dev/null 2>&1
+  elif [ -n "${ALF_INTEL_MODULES:-}" ]; then
+    printf "\nLoading Intel modules: %s\n" "${ALF_INTEL_MODULES}"
+    for intel_mod in ${ALF_INTEL_MODULES}; do
+      module load "$intel_mod" || return 1
+    done
+  else
+    module load intel/umf
+    module load intel/compiler-rt
+    module load intel/tbb
+    module load intel/compiler
+    module load intel/mkl
+    module load intel/mpi
+  fi
+  if command -v ifx > /dev/null; then
+    printf "Using %s\n" "$(ifx --version 2>&1 | head -n 1)"
+  else
+    printf "${RED}Warning: no ifx on PATH after loading the Intel toolchain${NC}\n" 1>&2
+  fi
 }
 
 set_intelcc()
@@ -561,12 +606,7 @@ case $MACHINE in
 
   #IntelX for PKS cluster
   PKS)
-    module load intel/umf
-    module load intel/compiler-rt
-    module load intel/tbb
-    module load intel/compiler
-    module load intel/mkl
-    module load intel/mpi
+    load_intel_env || return 1
     F90OPTFLAGS="${INTELLLVMOPTFLAGS/-xHost/-march=core-avx2}"
     F90USEFULFLAGS="$INTELLLVMUSEFULFLAGS"
     ALF_FC="$INTELLLVMCOMPILER"
@@ -582,11 +622,7 @@ case $MACHINE in
   #be constrained to those nodes: the -march targeted here emits instructions
   #the pool's Intel nodes cannot decode, giving SIGILL rather than a fallback.
   PKS_ZEN)
-    module load intel/umf
-    module load intel/compiler-rt
-    module load intel/tbb
-    module load intel/compiler
-    module load intel/mpi
+    load_intel_env || return 1
     module load aocl/5.3-gcc-ST
     set_aocl_flags
     ALF_FC="$INTELLLVMCOMPILER"
