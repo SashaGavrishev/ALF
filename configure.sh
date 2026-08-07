@@ -687,11 +687,13 @@ case $MACHINE in
   #binary format, and one from another compiler reports as "Corrupt or Old
   #Module file".
   #
-  #AOCC 5.2 compiles every ALF source but fails at link: classic flang emits no
-  #type descriptor for a derived type declared inside a submodule, so
-  #`allocate(ham_X::ham)` leaves an undefined `..._smod____ham_x__td_` for each
-  #Hamiltonian. scripts/benchmarks/flang_td_probe.sh in the parent repository
-  #narrows down which spellings of that pattern the compiler does accept.
+  #Not usable with AOCC 5.2 as it stands. Two separate classic-flang defects:
+  #no type descriptor for a derived type declared inside a submodule (the link
+  #fails on `allocate(ham_X::ham)`), and, once the type is moved to a companion
+  #module so it does link, a `procedure, nopass ::` override that dispatches to
+  #the *base* implementation -- the run dies with "Ham_set not defined!". Kept
+  #for a future LLVM-Flang-based AOCC; scripts/benchmarks/flang_td_probe.sh in
+  #the parent repository reproduces both in seconds.
   PKS_AOCC)
     module load aocc/5.2.0
     module load aocl/5.3-aocc-ST
