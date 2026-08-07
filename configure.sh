@@ -16,7 +16,7 @@ Please choose one of the following MACHINEs:
  * PKS
  * PKS_ZEN
    (both accept ALF_ONEAPI_SETVARS=/path/to/setvars.sh or
-    ALF_INTEL_MODULES="mod1 mod2 ..." to override the Intel toolchain)
+    ALF_INTEL_MODULES='mod1 mod2 ...' to override the Intel toolchain)
  * PKS_AOCC
  * PKS_GNU_ZEN
  * RAVEN
