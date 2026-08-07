@@ -259,6 +259,9 @@ load_intel_env()
     module load intel/umf
     module load intel/compiler-rt
     module load intel/tbb
+    # Thread Composability Manager, a runtime dependency of the newer compilers
+    # alongside tbb/umf/compiler-rt.
+    module load intel/tcm
     module load intel/compiler
     module load intel/mkl
     module load intel/mpi
