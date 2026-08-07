@@ -21,9 +21,15 @@ all: program
 
 program: ALF.out
 
+# -ipo has to be repeated at link. With it the objects hold intermediate
+# representation rather than machine code, and a link without it fails with
+# "file format not recognized". Taken from the compile flags rather than added
+# unconditionally, so a build that did not ask for IPO links exactly as before.
+IPO_FLAG := $(filter -ipo,$(ALF_FLAGS_PROG))
+
 ALF.out: $(DEPSFILE) $(OBJS)
 	@echo "Link program"
-	$(ALF_FC) -o "ALF.out" $(OBJS) $(ALF_LIB)
+	$(ALF_FC) $(IPO_FLAG) -o "ALF.out" $(OBJS) $(ALF_LIB)
 
 OHAM := $(shell ./parse_ham.py --print_obj_list 2>/dev/null)
 

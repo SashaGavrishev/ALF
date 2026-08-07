@@ -34,8 +34,13 @@ lib: $(LIB)
 # OBJS and MODS are auto-generated into $(DEPSFILE) by gen_deps.py
 -include $(DEPSFILE)
 
+# Plain `ar` cannot archive the intermediate-representation objects -ipo emits;
+# Intel ships xiar for that. Only when IPO was actually asked for, so an
+# ordinary build keeps using ar.
+ALF_AR := $(if $(filter -ipo,$(ALF_FLAGS_MODULES)),$(shell command -v xiar 2>/dev/null || echo ar),ar)
+
 $(LIB): $(DEPSFILE) $(OBJS)
-	ar -r $(LIB) $(OBJS)
+	$(ALF_AR) -r $(LIB) $(OBJS)
 
 lattices_x86-64.so: runtime_error_mod.F90 lattices_interface_mod.F90 matrix_mod.F90 lattices_v3_mod.F90
 	(make clean)
