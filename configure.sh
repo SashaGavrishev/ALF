@@ -110,12 +110,31 @@ set_hdf5_flags()
   fi
   INC_HDF5="-I$HDF5_DIR/include"
   LIB_HDF5="-L$HDF5_DIR/lib $HDF5_DIR/lib/libhdf5hl_fortran.a $HDF5_DIR/lib/libhdf5_hl.a"
-  EXTRA_LIBRARIES="$("$HDF5_DIR"/bin/h5fc -showconfig | grep 'Extra libraries:' | cut -f2 -d':')"
-  LIB_HDF5="$LIB_HDF5 $HDF5_DIR/lib/libhdf5_fortran.a $HDF5_DIR/lib/libhdf5.a $EXTRA_LIBRARIES -Wl,-rpath -Wl,$HDF5_DIR/lib"
 
-  if ! "$HDF5_DIR/bin/h5fc" -showconfig | grep "deflate(zlib)" > /dev/null; then
+  h5_config="$("$HDF5_DIR"/bin/h5fc -showconfig 2>/dev/null)"
+  EXTRA_LIBRARIES="$(printf '%s\n' "$h5_config" | grep 'Extra libraries:' | cut -f2 -d':')"
+
+  # h5fc does not reliably report what a *static* libhdf5.a needs: some builds
+  # leave "Extra libraries:" empty, and the link then fails on zlib's
+  # compress2/inflate from H5Zdeflate.o. Add what is missing rather than trust
+  # it. -lz only when the build actually has deflate, so a compression-less
+  # HDF5 does not acquire a dependency it has no use for.
+  if printf '%s\n' "$h5_config" | grep -q "deflate(zlib)"; then
+    case " $EXTRA_LIBRARIES " in
+      *" -lz "*) ;;
+      *) EXTRA_LIBRARIES="$EXTRA_LIBRARIES -lz" ;;
+    esac
+  else
     printf "${RED}Warning: HDF5 installed without compression capabilies. The output files will not be compressed!${NC}\n" 1>&2
   fi
+  for h5_lib in -ldl -lm; do
+    case " $EXTRA_LIBRARIES " in
+      *" $h5_lib "*) ;;
+      *) EXTRA_LIBRARIES="$EXTRA_LIBRARIES $h5_lib" ;;
+    esac
+  done
+
+  LIB_HDF5="$LIB_HDF5 $HDF5_DIR/lib/libhdf5_fortran.a $HDF5_DIR/lib/libhdf5.a $EXTRA_LIBRARIES -Wl,-rpath -Wl,$HDF5_DIR/lib"
 }
 
 check_libs()
