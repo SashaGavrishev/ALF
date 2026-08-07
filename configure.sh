@@ -237,9 +237,19 @@ set_aocl_flags()
   AOCL_BLAS_LAPACK="-lflame -lblis $aocl_fortran_rt"
   for aocl_root in "${AOCL_ROOT:-}" "${AOCL_DIR:-}" "${AOCL_HOME:-}"; do
     if [ -n "$aocl_root" ] && [ -d "$aocl_root/lib" ]; then
+      # libblis pulls in libaoclutils. Naming it here makes it a direct
+      # dependency of the binary, which the rpath below does cover.
+      if ls "$aocl_root"/lib/libaoclutils.* > /dev/null 2>&1; then
+        AOCL_BLAS_LAPACK="$AOCL_BLAS_LAPACK -laoclutils"
+      fi
       # -rpath as well as -L: build and run are separate jobs, and the binary
       # must resolve libblis without the module being reloaded.
-      AOCL_BLAS_LAPACK="-L$aocl_root/lib -Wl,-rpath,$aocl_root/lib $AOCL_BLAS_LAPACK"
+      # --disable-new-dtags emits DT_RPATH rather than DT_RUNPATH. Only DT_RPATH
+      # is searched when resolving a *dependency's* dependencies, and without it
+      # the loader ignores this path for anything libblis itself needs, failing
+      # with "libaoclutils.so: cannot open shared object file" at run time on a
+      # binary that linked cleanly.
+      AOCL_BLAS_LAPACK="-L$aocl_root/lib -Wl,--disable-new-dtags -Wl,-rpath,$aocl_root/lib $AOCL_BLAS_LAPACK"
       return 0
     fi
   done
