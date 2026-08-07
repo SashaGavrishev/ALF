@@ -114,12 +114,13 @@ set_hdf5_flags()
   h5_config="$("$HDF5_DIR"/bin/h5fc -showconfig 2>/dev/null)"
   EXTRA_LIBRARIES="$(printf '%s\n' "$h5_config" | grep 'Extra libraries:' | cut -f2 -d':')"
 
-  # h5fc does not reliably report what a *static* libhdf5.a needs: some builds
-  # leave "Extra libraries:" empty, and the link then fails on zlib's
-  # compress2/inflate from H5Zdeflate.o. Add what is missing rather than trust
-  # it. -lz only when the build actually has deflate, so a compression-less
-  # HDF5 does not acquire a dependency it has no use for.
-  if printf '%s\n' "$h5_config" | grep -q "deflate(zlib)"; then
+  # Whether libhdf5.a needs zlib is asked of the archive, not of h5fc: some
+  # installs leave "Extra libraries:" empty and others have no usable h5fc at
+  # all, but an undefined inflateInit_ in the archive is unambiguous. Without
+  # this the link fails on compress2/inflate from H5Zdeflate.o. The config text
+  # is kept as a fallback for platforms with no nm.
+  if nm -u "$HDF5_DIR/lib/libhdf5.a" 2>/dev/null | grep -q 'inflateInit_' \
+     || printf '%s\n' "$h5_config" | grep -q "deflate(zlib)"; then
     case " $EXTRA_LIBRARIES " in
       *" -lz "*) ;;
       *) EXTRA_LIBRARIES="$EXTRA_LIBRARIES -lz" ;;
