@@ -59,7 +59,10 @@ set_hdf5_flags()
   CC="$1" FC="$2" CXX="$3"
   
   $FC -o "$tmpdir/get_compiler_version.out" get_compiler_version.F90
-  compiler_vers=$("$tmpdir/get_compiler_version.out" | sed 's/[ ,()]/_/g')
+  # This becomes a directory name, so strip # and / as well as whitespace and
+  # punctuation: AOCC reports "AOCC_5.2.0-Build#2035", and a # in a build path
+  # is treated as a comment by make and mishandled by libtool.
+  compiler_vers=$("$tmpdir/get_compiler_version.out" | sed 's|[ ,()#/]|_|g')
   
   H5_major=1
   H5_minor=14
@@ -92,6 +95,16 @@ set_hdf5_flags()
         return 1
       ;;
     esac
+  fi
+  # A half-finished install leaves the directory in place, so the check above
+  # skips reinstalling it on every later run while the Fortran module is still
+  # missing. The compiler then falls through to a system hdf5.mod built by
+  # another compiler and reports it as corrupt, far from the real cause.
+  if [ ! -f "$HDF5_DIR/include/hdf5.mod" ] && [ ! -f "$HDF5_DIR/include/HDF5.mod" ]; then
+    printf "${RED}\n==== Error: no hdf5.mod in %s/include ====${NC}\n" "$HDF5_DIR" 1>&2
+    printf "${RED}The HDF5 install for this compiler is incomplete. Delete${NC}\n" 1>&2
+    printf "${RED}%s and re-run to rebuild it.${NC}\n\n" "$HDF5_DIR" 1>&2
+    return 1
   fi
   INC_HDF5="-I$HDF5_DIR/include"
   LIB_HDF5="-L$HDF5_DIR/lib $HDF5_DIR/lib/libhdf5hl_fortran.a $HDF5_DIR/lib/libhdf5_hl.a"
