@@ -576,6 +576,11 @@ case $MACHINE in
   #flavour, so compiler runtime, OpenMP runtime and BLAS come from one
   #toolchain. Same SIGILL constraint as PKS_ZEN.
   PKS_GNU_ZEN)
+    # znver5 needs gcc 14.1 or newer, which the system compiler is unlikely to
+    # be. Set ALF_GCC_MODULE to pin a version; best_march reports what it
+    # settled on, so a module too old to know znver5 shows up as "Targeting
+    # znver4" rather than as a build failure.
+    module load "${ALF_GCC_MODULE:-gcc}"
     module load aocl/5.3-gcc-ST
     set_aocl_flags
     ALF_FC="$GNUCOMPILER"
