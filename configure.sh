@@ -15,6 +15,7 @@ Please choose one of the following MACHINEs:
  * FRITZ
  * PKS
  * PKS_ZEN
+ * PKS_AOCC
  * PKS_GNU_ZEN
  * RAVEN
 Possible MODEs are:
@@ -158,10 +159,9 @@ find_mkl_flag()
 }
 
 # Set BEST_MARCH to the first -march target in $2.. that compiler $1 accepts,
-# by test-compiling. Which targets exist is a property of the toolchain, not of
-# the hardware: oneAPI 2025.0 (both ifx and icx) stops at znver4 and 2025.2
-# added znver5, while gcc has had it since 14.1. Give a target the compiler
-# certainly has as the last candidate.
+# by test-compiling. Availability is a toolchain property, not a hardware one:
+# oneAPI added znver5 in 2025.2, gcc in 14.1. Pass a certainly-supported
+# target last.
 best_march()
 {
   bm_fc="$1"
@@ -182,18 +182,24 @@ best_march()
 
 # AOCL (AMD BLIS + libFLAME) in place of MKL's BLAS/LAPACK. Sets
 # AOCL_BLAS_LAPACK. libFLAME comes first: it provides LAPACK and calls into
-# BLIS for BLAS. -lgfortran because AOCL's -gcc flavour builds its reference
-# LAPACK with gfortran, whose runtime a non-GNU compiler does not link itself.
+# BLIS for BLAS.
+# $1 is AOCL's Fortran runtime: -lgfortran (the default) for the -gcc flavour,
+# "" for -aocc, whose runtime the flang driver links itself.
 # Load the single-threaded (ST) flavour; the MT build adds a second OpenMP
 # runtime alongside the compiler's.
 # ALF_AOCL_LIB overrides the link line entirely.
 set_aocl_flags()
 {
+  if [ "$#" -ge 1 ]; then
+    aocl_fortran_rt="$1"
+  else
+    aocl_fortran_rt="-lgfortran"
+  fi
   if [ -n "${ALF_AOCL_LIB:-}" ]; then
     AOCL_BLAS_LAPACK="$ALF_AOCL_LIB"
     return 0
   fi
-  AOCL_BLAS_LAPACK="-lflame -lblis -lgfortran"
+  AOCL_BLAS_LAPACK="-lflame -lblis $aocl_fortran_rt"
   for aocl_root in "${AOCL_ROOT:-}" "${AOCL_DIR:-}" "${AOCL_HOME:-}"; do
     if [ -n "$aocl_root" ] && [ -d "$aocl_root/lib" ]; then
       # -rpath as well as -L: build and run are separate jobs, and the binary
@@ -244,6 +250,19 @@ INTELLLVMOPTFLAGS="-cpp -O3 -fp-model=fast=2 -no-prec-div -static -xHost -unroll
 INTELLLVMDEVFLAGS="-warn all -check all,nouninit -g -traceback"
 INTELLLVMUSEFULFLAGS="-std08"
 
+
+# default optimization flags for AMD AOCC (classic flang: flang1/flang2, not
+# LLVM Flang; implements the Fortran 2008 submodules ALF needs). Intel's
+# -fp-model, -no-prec-div and -diag-disable spellings are rejected, so this is
+# not a transliteration of the Intel set.
+# -fno-finite-math-only: -ffast-math otherwise folds away Control_PrecisionG's
+# `any(A /= A)` NaN test (Prog/control_mod.F90).
+AOCCOPTFLAGS="-cpp -O3 -ffast-math -fno-finite-math-only -funroll-loops -finline-functions"
+AOCCDEVFLAGS="-g -Wall"
+# flang has no -std08 equivalent.
+AOCCUSEFULFLAGS=""
+# Serial driver; an MPI build would need the mpif90 wrapper.
+AOCCCOMPILER="flang"
 
 # default optimization flags for GNU compiler
 GNUOPTFLAGS="-cpp -O3 -ffree-line-length-none -ffast-math"
@@ -546,9 +565,9 @@ case $MACHINE in
     fi
   ;;
 
-  #IntelX + AOCL for the Zen-5 nodes of the PKS cluster. Jobs built with this
-  #must be constrained to those nodes: -march=znver5 emits instructions the
-  #pool's Intel nodes cannot decode, giving SIGILL rather than a fallback.
+  #IntelX + AOCL for the Zen nodes of the PKS cluster. Jobs built with this must
+  #be constrained to those nodes: the -march targeted here emits instructions
+  #the pool's Intel nodes cannot decode, giving SIGILL rather than a fallback.
   PKS_ZEN)
     module load intel/umf
     module load intel/compiler-rt
@@ -572,14 +591,32 @@ case $MACHINE in
     fi
   ;;
 
+  #AOCC (classic flang) + AOCL for the Zen-5 nodes of the PKS cluster. Uses
+  #AOCL's -aocc flavour, hence no -lgfortran. Same SIGILL constraint as
+  #PKS_ZEN. Needs an HDF5 built by this flang: .mod is a compiler-specific
+  #binary format, and one from another compiler reports as "Corrupt or Old
+  #Module file".
+  PKS_AOCC)
+    module load aocc/5.2.0
+    module load aocl/5.3-aocc-ST
+    set_aocl_flags ""
+    ALF_FC="$AOCCCOMPILER"
+    best_march "$ALF_FC" znver5 znver4 x86-64-v3
+    F90OPTFLAGS="$AOCCOPTFLAGS $BEST_MARCH"
+    F90USEFULFLAGS="$AOCCUSEFULFLAGS"
+    LIB_BLAS_LAPACK="$AOCL_BLAS_LAPACK"
+    if [ "${HDF5_ENABLED}" = "1" ]; then
+      set_hdf5_flags clang flang clang++ || return 1
+    fi
+  ;;
+
   #gfortran + AOCL for the Zen-5 nodes of the PKS cluster. Uses AOCL's -gcc
   #flavour, so compiler runtime, OpenMP runtime and BLAS come from one
   #toolchain. Same SIGILL constraint as PKS_ZEN.
   PKS_GNU_ZEN)
-    # znver5 needs gcc 14.1 or newer, which the system compiler is unlikely to
-    # be. Set ALF_GCC_MODULE to pin a version; best_march reports what it
-    # settled on, so a module too old to know znver5 shows up as "Targeting
-    # znver4" rather than as a build failure.
+    # znver5 needs gcc 14.1+, which the system compiler rarely is.
+    # ALF_GCC_MODULE pins a version; best_march prints the target it settled on,
+    # so an older module degrades visibly rather than failing.
     module load "${ALF_GCC_MODULE:-gcc}"
     module load aocl/5.3-gcc-ST
     set_aocl_flags
@@ -587,9 +624,8 @@ case $MACHINE in
     best_march "$ALF_FC" znver5 znver4 x86-64-v3
     # -fallow-argument-mismatch: see the GNU case above.
     test "$(gfortran -dumpversion)" -gt 9 && GNUOPTFLAGS="${GNUOPTFLAGS} -fallow-argument-mismatch"
-    # -fno-finite-math-only overrides the -ffast-math in GNUOPTFLAGS, which
-    # otherwise folds away Control_PrecisionG's `any(A /= A)` NaN test
-    # (Prog/control_mod.F90) and deletes the guard.
+    # -fno-finite-math-only overrides the -ffast-math in GNUOPTFLAGS; see
+    # AOCCOPTFLAGS.
     F90OPTFLAGS="$GNUOPTFLAGS $BEST_MARCH -fno-finite-math-only"
     F90USEFULFLAGS="$GNUUSEFULFLAGS"
     # -fopenmp on the link line too: Prog/Makefile links with $(ALF_LIB) alone.
