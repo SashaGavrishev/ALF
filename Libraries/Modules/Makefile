@@ -34,10 +34,22 @@ lib: $(LIB)
 # OBJS and MODS are auto-generated into $(DEPSFILE) by gen_deps.py
 -include $(DEPSFILE)
 
-# Plain `ar` cannot archive the intermediate-representation objects -ipo emits;
-# Intel ships xiar for that. Only when IPO was actually asked for, so an
-# ordinary build keeps using ar.
-ALF_AR := $(if $(filter -ipo,$(ALF_FLAGS_MODULES)),$(shell command -v xiar 2>/dev/null || echo ar),ar)
+# Plain `ar` cannot index the objects -ipo emits: it writes an archive with no
+# symbol table and the link fails with "archive has no index". Which archiver
+# can depends on the compiler -- xiar is Intel's tool for classic ifort, while
+# ifx is LLVM-based and emits bitcode that llvm-ar indexes. llvm-ar is tried
+# first because a stray old xiar on PATH (/usr/local/bin, left by a previous
+# Intel install) accepts the objects and silently produces an unindexed archive
+# rather than failing. Set ALF_AR to override the choice.
+ALF_IPO := $(filter -ipo,$(ALF_FLAGS_MODULES))
+ifeq ($(origin ALF_AR),undefined)
+ALF_AR := $(if $(ALF_IPO),$(shell command -v llvm-ar 2>/dev/null || command -v xiar 2>/dev/null || echo ar),ar)
+endif
+ifneq ($(ALF_IPO),)
+ifeq ($(notdir $(ALF_AR)),ar)
+$(warning -ipo needs llvm-ar or xiar; neither found, so this archive will have no symbol index)
+endif
+endif
 
 $(LIB): $(DEPSFILE) $(OBJS)
 	$(ALF_AR) -r $(LIB) $(OBJS)
