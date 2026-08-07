@@ -293,6 +293,14 @@ load_intel_env()
   fi
 }
 
+# gfortran's major version, or 0 if there is no gfortran. -dumpversion prints a
+# bare major on some builds and a full "12.2.0" on others, and feeding the
+# latter to `test -gt` fails with "integer expression expected".
+gfortran_major()
+{
+  gfortran -dumpversion 2>/dev/null | cut -d. -f1 | grep -E '^[0-9]+$' || echo 0
+}
+
 set_intelcc()
 {
   if command -v icx > /dev/null; then
@@ -509,7 +517,7 @@ case $MACHINE in
   #GNU (as Hybrid code)
   GNU)
     # -fallow-argument-mismatch was required by gfortran10 and MPICH, they changed default behaviour in v10
-    test $(gfortran -dumpversion) -gt 9 && GNUOPTFLAGS="${GNUOPTFLAGS} -fallow-argument-mismatch"
+    test "$(gfortran_major)" -gt 9 && GNUOPTFLAGS="${GNUOPTFLAGS} -fallow-argument-mismatch"
     F90OPTFLAGS="$GNUOPTFLAGS"
     F90USEFULFLAGS="$GNUUSEFULFLAGS"
     ALF_FC="$GNUCOMPILER"
@@ -701,7 +709,7 @@ case $MACHINE in
     ALF_FC="$GNUCOMPILER"
     best_march "$ALF_FC" znver5 znver4 x86-64-v3
     # -fallow-argument-mismatch: see the GNU case above.
-    test "$(gfortran -dumpversion)" -gt 9 && GNUOPTFLAGS="${GNUOPTFLAGS} -fallow-argument-mismatch"
+    test "$(gfortran_major)" -gt 9 && GNUOPTFLAGS="${GNUOPTFLAGS} -fallow-argument-mismatch"
     # -fno-finite-math-only overrides the -ffast-math in GNUOPTFLAGS; see
     # AOCCOPTFLAGS.
     F90OPTFLAGS="$GNUOPTFLAGS $BEST_MARCH -fno-finite-math-only"
@@ -751,7 +759,7 @@ case $MACHINE in
     PROGRAMMCONFIGURATION=""
     F90OPTFLAGS="-cpp -O3 -ffree-line-length-none -ffast-math"
     # -fallow-argument-mismatch was required by gfortran10 and MPICH, they changed default behaviour in v10
-    test $(gfortran -dumpversion) -gt 9 && F90OPTFLAGS="${F90OPTFLAGS} -fallow-argument-mismatch"
+    test "$(gfortran_major)" -gt 9 && F90OPTFLAGS="${F90OPTFLAGS} -fallow-argument-mismatch"
     F90USEFULFLAGS=""
 
     ALF_FC="gfortran"
