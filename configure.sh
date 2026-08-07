@@ -609,6 +609,12 @@ case $MACHINE in
   #PKS_ZEN. Needs an HDF5 built by this flang: .mod is a compiler-specific
   #binary format, and one from another compiler reports as "Corrupt or Old
   #Module file".
+  #
+  #AOCC 5.2 compiles every ALF source but fails at link: classic flang emits no
+  #type descriptor for a derived type declared inside a submodule, so
+  #`allocate(ham_X::ham)` leaves an undefined `..._smod____ham_x__td_` for each
+  #Hamiltonian. scripts/benchmarks/flang_td_probe.sh in the parent repository
+  #narrows down which spellings of that pattern the compiler does accept.
   PKS_AOCC)
     module load aocc/5.2.0
     module load aocl/5.3-aocc-ST
