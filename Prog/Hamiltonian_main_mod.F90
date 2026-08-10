@@ -137,12 +137,9 @@
     
     private
     public :: Alloc_Ham, ham_base, ham, LOG_T0_REJECTED
-    ! Public unconditionally, not just for __PGI: a Hamiltonian may declare its
-    ! type in a companion module rather than in its submodule (see
-    ! Hamiltonian_Hubbard_Plain_Vanilla_Disorder_smod.F90), and a module gets
-    ! only the public names where a submodule inherited everything by host
-    ! association.
+#ifdef __PGI
     public :: Obs_scal, Obs_eq, Obs_tau
+#endif
       
       ! Sentinel value for rejected global moves in log scale
       Real (Kind=Kind(0.d0)), parameter :: LOG_T0_REJECTED = -huge(1.d0)
