@@ -592,9 +592,13 @@ case $MACHINE in
   GNU)
     # -fallow-argument-mismatch was required by gfortran10 and MPICH, they changed default behaviour in v10
     test "$(gfortran_major)" -gt 9 && GNUOPTFLAGS="${GNUOPTFLAGS} -fallow-argument-mismatch"
-    F90OPTFLAGS="$GNUOPTFLAGS"
-    F90USEFULFLAGS="$GNUUSEFULFLAGS"
     ALF_FC="$GNUCOMPILER"
+    F90OPTFLAGS="$GNUOPTFLAGS"
+    # GNUOPTFLAGS carries -ffast-math, which deletes control_mod.F90's NaN
+    # guard; see set_nan_guard_flag.
+    set_nan_guard_flag "$ALF_FC" "$F90OPTFLAGS" -fno-finite-math-only -fhonor-nans
+    F90OPTFLAGS="$F90OPTFLAGS $NAN_GUARD_FLAG"
+    F90USEFULFLAGS="$GNUUSEFULFLAGS"
     LIB_BLAS_LAPACK="-llapack -lblas -fopenmp"
     if [ "${HDF5_ENABLED}" = "1" ]; then
       set_hdf5_flags gcc gfortran g++ || return 1
@@ -795,9 +799,12 @@ case $MACHINE in
     best_march "$ALF_FC" znver5 znver4 x86-64-v3 || return 1
     # -fallow-argument-mismatch: see the GNU case above.
     test "$(gfortran_major)" -gt 9 && GNUOPTFLAGS="${GNUOPTFLAGS} -fallow-argument-mismatch"
-    # -fno-finite-math-only overrides the -ffast-math in GNUOPTFLAGS; see
-    # AOCCOPTFLAGS.
-    F90OPTFLAGS="$GNUOPTFLAGS $BEST_MARCH -fno-finite-math-only"
+    F90OPTFLAGS="$GNUOPTFLAGS $BEST_MARCH"
+    # Probed rather than hard-coded, as in the GNU case: which flag restores the
+    # guard against GNUOPTFLAGS' -ffast-math is a property of the gcc this
+    # module happens to provide, and the probe checks it instead of assuming.
+    set_nan_guard_flag "$ALF_FC" "$F90OPTFLAGS" -fno-finite-math-only -fhonor-nans
+    F90OPTFLAGS="$F90OPTFLAGS $NAN_GUARD_FLAG"
     F90USEFULFLAGS="$GNUUSEFULFLAGS"
     # -fopenmp on the link line too: Prog/Makefile links with $(ALF_LIB) alone.
     LIB_BLAS_LAPACK="$AOCL_BLAS_LAPACK -fopenmp"
