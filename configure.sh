@@ -215,6 +215,67 @@ best_march()
   return 1
 }
 
+# Set NAN_GUARD_FLAG to the first flag in $3.. that makes compiler $1 keep a NaN
+# self-comparison under optimisation flags $2, or "" if it already keeps one.
+#
+# Prog/control_mod.F90 guards each stabilisation with `if (any(A /= A))`. Any
+# flag implying -ffinite-math-only lets the compiler assume no operand is NaN,
+# fold that to .false. and delete the guard, with no diagnostic: a run whose
+# Green function diverges then writes plausible-looking bins instead of
+# aborting. ifx -fp-model=fast=2 does exactly this (measured; see
+# scripts/benchmarks/nanguard.f90 in the parent repository), and
+# Control_Precision_tau has no magnitude threshold to fall back on.
+#
+# Probed rather than hard-coded: the restoring flag differs between compilers
+# and versions, and passing an unsupported one is a hard error on ifx. The probe
+# is compiled without -march so it runs on the build node whatever the target
+# is, and it is *executed* -- a compiler accepting the flag does not prove the
+# flag changed the generated comparison. -static is dropped too: neither it nor
+# the target affects whether the comparison is folded, but a fully static link
+# can fail for its own reasons and would look like "no flag works".
+# ALF_NAN_GUARD_FLAG overrides the probe.
+set_nan_guard_flag()
+{
+  ng_fc="$1"
+  ng_base=$(printf '%s' "$2" | sed 's/-march=[^ ]*//g; s/-xHost//g; s/-static[a-z-]*//g')
+  shift 2
+  if [ -n "${ALF_NAN_GUARD_FLAG+x}" ]; then
+    NAN_GUARD_FLAG="${ALF_NAN_GUARD_FLAG}"
+    printf "\nNaN guard flag pinned to '%s'\n" "${NAN_GUARD_FLAG}"
+    return 0
+  fi
+  cat > "$tmpdir/nan_probe.f90" <<'EOF'
+program nan_probe
+  implicit none
+  real(kind(0.d0)) :: a(2), z
+  ! Runtime-valued, so the NaN is not constant-folded at compile time.
+  z = real(command_argument_count(), kind(0.d0))
+  a(1) = 1.d0
+  a(2) = z/z
+  if (any(a /= a)) then
+     print *, "FIRED"
+  else
+     print *, "SILENT"
+  end if
+end program nan_probe
+EOF
+  for ng_flag in "" "$@"; do
+    if sh -c "$ng_fc $ng_base $ng_flag -o $tmpdir/nan_probe.out $tmpdir/nan_probe.f90" \
+         > /dev/null 2>&1 \
+       && "$tmpdir/nan_probe.out" 2>/dev/null | grep -q FIRED; then
+      NAN_GUARD_FLAG="$ng_flag"
+      if [ -n "$ng_flag" ]; then
+        printf "\nNaN guard needs %s at these optimisation settings; adding it\n" "$ng_flag"
+      fi
+      return 0
+    fi
+  done
+  NAN_GUARD_FLAG=""
+  printf "${RED}Warning: none of '%s' restores the NaN guard for <%s>.${NC}\n" "$*" "$ng_fc" 1>&2
+  printf "${RED}  control_mod.F90 cannot detect a diverged Green function in this build.${NC}\n" 1>&2
+  return 1
+}
+
 # AOCL (AMD BLIS + libFLAME) in place of MKL's BLAS/LAPACK. Sets
 # AOCL_BLAS_LAPACK. libFLAME comes first: it provides LAPACK and calls into
 # BLIS for BLAS.
@@ -248,7 +309,10 @@ set_aocl_flags()
       # is searched when resolving a *dependency's* dependencies, and without it
       # the loader ignores this path for anything libblis itself needs, failing
       # with "libaoclutils.so: cannot open shared object file" at run time on a
-      # binary that linked cleanly.
+      # binary that linked cleanly. It applies to the whole link, not just this
+      # -L: every rpath on the line becomes DT_RPATH, including HDF5's, and
+      # DT_RPATH outranks LD_LIBRARY_PATH -- so no library in the resulting
+      # binary can be swapped at run time by setting that variable.
       AOCL_BLAS_LAPACK="-L$aocl_root/lib -Wl,--disable-new-dtags -Wl,-rpath,$aocl_root/lib $AOCL_BLAS_LAPACK"
       return 0
     fi
@@ -648,9 +712,12 @@ case $MACHINE in
   #IntelX for PKS cluster
   PKS)
     load_intel_env || return 1
-    F90OPTFLAGS="${INTELLLVMOPTFLAGS/-xHost/-march=core-avx2}"
-    F90USEFULFLAGS="$INTELLLVMUSEFULFLAGS"
     ALF_FC="$INTELLLVMCOMPILER"
+    F90OPTFLAGS="${INTELLLVMOPTFLAGS/-xHost/-march=core-avx2}"
+    # -fp-model=fast=2 deletes control_mod.F90's NaN guard; see set_nan_guard_flag.
+    set_nan_guard_flag "$ALF_FC" "$F90OPTFLAGS" -fhonor-nans -fno-finite-math-only -fp-model=fast=1
+    F90OPTFLAGS="$F90OPTFLAGS $NAN_GUARD_FLAG"
+    F90USEFULFLAGS="$INTELLLVMUSEFULFLAGS"
     LIB_BLAS_LAPACK="-qmkl"
     if [ "${HDF5_ENABLED}" = "1" ]; then
       set_intelcc
@@ -667,11 +734,17 @@ case $MACHINE in
     module load aocl/5.3-gcc-ST
     set_aocl_flags
     ALF_FC="$INTELLLVMCOMPILER"
-    best_march "$ALF_FC" znver5 znver4 core-avx2
+    # Fatal rather than best-effort: an empty BEST_MARCH removes -xHost and puts
+    # nothing back, so a total probe failure builds generic x86-64 -- no AVX2,
+    # slower than the plain PKS baseline, from a build that otherwise succeeds.
+    best_march "$ALF_FC" znver5 znver4 core-avx2 || return 1
     # -static-intel replaces -static: AOCL links as a shared library, which a
     # fully static link cannot resolve.
     F90OPTFLAGS="${INTELLLVMOPTFLAGS/-xHost/$BEST_MARCH}"
     F90OPTFLAGS="${F90OPTFLAGS/-static /-static-intel }"
+    # -fp-model=fast=2 deletes control_mod.F90's NaN guard; see set_nan_guard_flag.
+    set_nan_guard_flag "$ALF_FC" "$F90OPTFLAGS" -fhonor-nans -fno-finite-math-only -fp-model=fast=1
+    F90OPTFLAGS="$F90OPTFLAGS $NAN_GUARD_FLAG"
     F90USEFULFLAGS="$INTELLLVMUSEFULFLAGS"
     LIB_BLAS_LAPACK="$AOCL_BLAS_LAPACK"
     if [ "${HDF5_ENABLED}" = "1" ]; then
@@ -699,7 +772,7 @@ case $MACHINE in
     module load aocl/5.3-aocc-ST
     set_aocl_flags ""
     ALF_FC="$AOCCCOMPILER"
-    best_march "$ALF_FC" znver5 znver4 x86-64-v3
+    best_march "$ALF_FC" znver5 znver4 x86-64-v3 || return 1
     F90OPTFLAGS="$AOCCOPTFLAGS $BEST_MARCH"
     F90USEFULFLAGS="$AOCCUSEFULFLAGS"
     LIB_BLAS_LAPACK="$AOCL_BLAS_LAPACK"
@@ -719,7 +792,7 @@ case $MACHINE in
     module load aocl/5.3-gcc-ST
     set_aocl_flags
     ALF_FC="$GNUCOMPILER"
-    best_march "$ALF_FC" znver5 znver4 x86-64-v3
+    best_march "$ALF_FC" znver5 znver4 x86-64-v3 || return 1
     # -fallow-argument-mismatch: see the GNU case above.
     test "$(gfortran_major)" -gt 9 && GNUOPTFLAGS="${GNUOPTFLAGS} -fallow-argument-mismatch"
     # -fno-finite-math-only overrides the -ffast-math in GNUOPTFLAGS; see
