@@ -15,7 +15,8 @@ Please choose one of the following MACHINEs:
  * FRITZ
  * PKS
  * PKS_ZEN
-   (both accept ALF_ONEAPI_SETVARS=/path/to/setvars.sh or
+ * PKS_ZEN_MKL
+   (all three accept ALF_ONEAPI_SETVARS=/path/to/setvars.sh or
     ALF_INTEL_MODULES='mod1 mod2 ...' to override the Intel toolchain)
  * PKS_AOCC
  * PKS_GNU_ZEN
@@ -713,7 +714,9 @@ case $MACHINE in
     fi
   ;;
 
-  #IntelX for PKS cluster
+  #IntelX for PKS cluster. -march=core-avx2 is the common baseline of a mixed
+  #Intel/AMD pool, so this is the case that runs anywhere; PKS_ZEN_MKL is the
+  #production target and trades that breadth for the Zen-5 nodes.
   PKS)
     load_intel_env || return 1
     ALF_FC="$INTELLLVMCOMPILER"
@@ -733,6 +736,10 @@ case $MACHINE in
   #IntelX + AOCL for the Zen nodes of the PKS cluster. Jobs built with this must
   #be constrained to those nodes: the -march targeted here emits instructions
   #the pool's Intel nodes cannot decode, giving SIGILL rather than a fallback.
+  #
+  #Superseded by PKS_ZEN_MKL for production -- AOCL loses to MKL once the node is
+  #packed -- and kept as the AOCL arm of that comparison, which is also what
+  #PKS_GNU_ZEN's compiler axis reads against.
   PKS_ZEN)
     load_intel_env || return 1
     module load aocl/5.3-gcc-ST
@@ -751,6 +758,52 @@ case $MACHINE in
     F90OPTFLAGS="$F90OPTFLAGS $NAN_GUARD_FLAG"
     F90USEFULFLAGS="$INTELLLVMUSEFULFLAGS"
     LIB_BLAS_LAPACK="$AOCL_BLAS_LAPACK"
+    if [ "${HDF5_ENABLED}" = "1" ]; then
+      set_intelcc
+      set_intelcxx
+      set_hdf5_flags "$INTELCC" ifx "$INTELCXX" || return 1
+    fi
+  ;;
+
+  #IntelX + MKL for the Zen-5 nodes of the PKS cluster. Same SIGILL constraint
+  #as PKS_ZEN: the -march targeted here emits instructions the pool's Intel
+  #nodes cannot decode.
+  #
+  #MKL rather than PKS_ZEN's AOCL because the two libraries are equivalent on an
+  #idle core but not on a full node -- BLIS packs A and B on every call, which is
+  #free solo and not free when every core is competing for the same memory
+  #bandwidth, and this cluster's nodes run packed with single-core chains.
+  #
+  #MKL dispatches on CPUID *vendor*, not on features, so on AMD it needs the
+  #vendor-check override LD_PRELOADed at *run* time or it takes a conservative
+  #kernel and this target is roughly half speed with nothing to say about it.
+  #The override is a runtime artefact, not a link-time one: see scripts/mkl_shim.py
+  #in the parent repository, which builds it and checks it engaged.
+  PKS_ZEN_MKL)
+    load_intel_env || return 1
+    ALF_FC="$INTELLLVMCOMPILER"
+    # Fatal rather than best-effort, as in PKS_ZEN: an empty BEST_MARCH removes
+    # -xHost and puts nothing back, so a total probe failure builds generic
+    # x86-64 -- no AVX2, slower than the plain PKS baseline it was meant to beat.
+    best_march "$ALF_FC" znver5 znver4 core-avx2 || return 1
+    # -static-intel replaces -static, and here that is a correctness requirement
+    # rather than PKS_ZEN's link fix: LD_PRELOAD can only interpose a symbol that
+    # is resolved dynamically, so a fully static MKL would leave the shim doing
+    # nothing at all -- silently, since a preload that binds no symbol is not an
+    # error. The Intel runtime stays static, which is all -static bought here.
+    F90OPTFLAGS="${INTELLLVMOPTFLAGS/-xHost/$BEST_MARCH}"
+    F90OPTFLAGS="${F90OPTFLAGS/-static /-static-intel }"
+    # -fp-model=fast=2 deletes control_mod.F90's NaN guard; see set_nan_guard_flag.
+    set_nan_guard_flag "$ALF_FC" "$F90OPTFLAGS" -fhonor-nans -fno-finite-math-only -fp-model=fast=1
+    F90OPTFLAGS="$F90OPTFLAGS $NAN_GUARD_FLAG"
+    F90USEFULFLAGS="$INTELLLVMUSEFULFLAGS"
+    # Threaded MKL deliberately, exactly as measured. Every chain runs on one
+    # core, so the thread pool is unused rather than harmful; MKL_NUM_THREADS=1
+    # is exported alongside it (scripts/environments.py) so it stays that way
+    # even if SLURM_CPUS_PER_TASK, which is what pyALF derives OMP_NUM_THREADS
+    # from, is ever missing. -qmkl=sequential would drop the pool outright and
+    # is worth pricing, but it is not the configuration the benchmark ranked.
+    LIB_BLAS_LAPACK="-qmkl"
     if [ "${HDF5_ENABLED}" = "1" ]; then
       set_intelcc
       set_intelcxx
