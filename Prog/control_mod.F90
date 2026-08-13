@@ -55,6 +55,19 @@ module Control
     Integer          , private, save :: NCG, NCG_tau
     Integer (Kind=Kind(0.d0)) , private, save :: NC_up, ACC_up
     Integer (Kind=Kind(0.d0)) , private, save :: NC_eff_up, ACC_eff_up
+
+    ! How much of the run is spent applying the low-rank update to the Green's
+    ! function -- the block upgrade_mod applies on every accepted move, and the
+    ! only part a delayed (rank-k) scheme would replace. Reported as a share of
+    ! CPU Time, because that share is what bounds what such a scheme could ever
+    ! be worth: a kernel made S times faster on a fraction F of the runtime
+    ! returns 1/((1-F) + F/S), which is capped at 1/(1-F) however good S is.
+    !
+    ! Sampled rather than timed on every update; see upgrade_mod. NC_update
+    ! counts every update applied, NC_update_timed only those a clock was read
+    ! around, so the estimate is Time_update * NC_update / NC_update_timed.
+    Real    (Kind=Kind(0.d0)), private, save :: Time_update
+    Integer (Kind=Kind(0.d0)), private, save :: NC_update, NC_update_timed
     Integer (Kind=kind(0.d0)),  private, save :: NC_Glob_up, ACC_Glob_up
     Integer (Kind=kind(0.d0)),  private, save :: NC_HMC_up, ACC_HMC_up
     Integer (Kind=kind(0.d0)),  private, save :: NC_Temp_up, ACC_Temp_up
@@ -110,6 +123,10 @@ module Control
         
         NC_Temp_up   = 0
         ACC_Temp_up  = 0
+
+        Time_update     = 0.d0
+        NC_update       = 0
+        NC_update_timed = 0
 
         size_clust_Glob_up    = 0.d0
         size_clust_Glob_ACC_up= 0.d0
@@ -174,6 +191,31 @@ module Control
         NC_eff_up = NC_eff_up + 1
         if (toggle) ACC_eff_up = ACC_eff_up + 1
       end Subroutine Control_upgrade_eff
+
+!--------------------------------------------------------------------
+!> @brief
+!> Record that one low-rank Green's-function update was applied, and -- when
+!> upgrade_mod sampled this one -- how long it took.
+!>
+!> @details
+!> Counted for every accepted move in either mode, not only FINAL ones: an
+!> INTERMEDIATE leg of a composite move applies the same update and costs the
+!> same, so excluding it (as Control_upgrade does, correctly, for the acceptance
+!> *rate*) would understate the share of runtime this block owns.
+!>
+!> ``seconds`` is ignored unless ``timed``, which keeps the caller free to read
+!> the clock on only a sample of updates.
+!--------------------------------------------------------------------
+      Subroutine Control_update(timed, seconds)
+        Implicit none
+        Logical, Intent(In) :: timed
+        Real (Kind=Kind(0.d0)), Intent(In) :: seconds
+        NC_update = NC_update + 1
+        if (timed) then
+           Time_update     = Time_update + seconds
+           NC_update_timed = NC_update_timed + 1
+        endif
+      end Subroutine Control_update
 
       Subroutine Control_upgrade_Temp(toggle)
         Implicit none
@@ -353,6 +395,7 @@ module Control
 
         Character (len=64) :: file1
         Real (Kind=Kind(0.d0)) :: Time, Acc, Acc_eff, Acc_Glob, Acc_Temp, size_clust_Glob, size_clust_Glob_ACC, Acc_HMC
+        Real (Kind=Kind(0.d0)) :: Update_time, Update_share
 #ifdef MPI
         REAL (Kind=Kind(0.d0))  :: X
         Integer        :: Ierr, Isize, Irank, irank_g, isize_g, igroup
@@ -389,6 +432,16 @@ module Control
         call system_clock(count_CPU_end)
         time = (count_CPU_end-count_CPU_start)/dble(count_rate)
         if (count_CPU_end .lt. count_CPU_start) time = (count_max+count_CPU_end-count_CPU_start)/dble(count_rate)
+
+        ! Scale the sampled updates up to all of them. Both are zero for a run
+        ! that accepted nothing, which is reported as no verdict rather than as
+        ! a zero share.
+        Update_time  = 0.d0
+        Update_share = 0.d0
+        if (NC_update_timed > 0) then
+           Update_time = Time_update * dble(NC_update)/dble(NC_update_timed)
+           if (Time > 0.d0) Update_share = Update_time/Time
+        endif
         If (str_to_upper(Global_update_scheme) == "LANGEVIN") Force_mean =  Force_mean/real(Force_count,kind(0.d0)) 
         
 #if defined(MPI)
@@ -405,6 +458,16 @@ module Control
         X = 0.d0
         CALL MPI_REDUCE(ACC_eff,X,1,MPI_REAL8,MPI_SUM, 0,Group_Comm,IERR)
         ACC_eff = X/dble(Isize_g)
+        ! Means, as for Time and the acceptances: every rank does the same
+        ! amount of this work, so a mean describes any one of them. The counts
+        ! stay rank-local, since a summed count beside a mean time would not
+        ! reconstruct anything.
+        X = 0.d0
+        CALL MPI_REDUCE(Update_time,X,1,MPI_REAL8,MPI_SUM, 0,Group_Comm,IERR)
+        Update_time = X/dble(Isize_g)
+        X = 0.d0
+        CALL MPI_REDUCE(Update_share,X,1,MPI_REAL8,MPI_SUM, 0,Group_Comm,IERR)
+        Update_share = X/dble(Isize_g)
         X = 0.d0
         CALL MPI_REDUCE(ACC_Glob,X,1,MPI_REAL8,MPI_SUM, 0,Group_Comm,IERR)
         ACC_Glob = X/dble(Isize_g)
@@ -479,6 +542,12 @@ module Control
            Endif
            If ( NC_eff_up > 0 ) then
               Write(50,*) ' Effective Acceptance       : ', ACC_eff
+           Endif
+           If ( NC_update_timed > 0 ) then
+              Write(50,*) ' Green updates              : ', NC_update
+              Write(50,*) ' Green update time          : ', Update_time
+              Write(50,*) ' Green update share         : ', Update_share
+              Write(50,*) ' Green updates timed        : ', NC_update_timed
            Endif
 #if defined(TEMPERING)
            Write(50,*) ' Acceptance Tempering       : ', ACC_Temp

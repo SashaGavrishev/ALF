@@ -33,7 +33,43 @@
 module upgrade_mod
    use runtime_error_mod
    implicit none
+
+   ! Sampling for the Green's-function update timer (see Control_update).
+   !
+   ! One accepted update at production sizes is microseconds to milliseconds and
+   ! a clock read is tens of nanoseconds, so timing every one would cost about a
+   ! percent -- small, but paid by every production run to answer a question
+   ! asked once. Timing one in UPDATE_SAMPLE instead puts it under a thousandth
+   ! while still accumulating thousands of samples per bin.
+   !
+   ! Prime, so the sample does not alias with the per-slice operator count and
+   ! keep landing at the same point in the sweep. ALF_UPDATE_SAMPLE overrides
+   ! it: 1 times every update, which is the cross-check that the sampling is
+   ! unbiased, and 0 disables the timing entirely.
+   integer, parameter, private :: UPDATE_SAMPLE_DEFAULT = 61
+   integer, private, save :: update_sample = -1
+   integer, private, save :: update_calls = 0
+
    contains
+
+!--------------------------------------------------------------------
+!> @brief
+!> Sampling stride for the update timer, read once from ALF_UPDATE_SAMPLE.
+!--------------------------------------------------------------------
+   integer function update_sample_stride()
+      implicit none
+      character(len=32) :: text
+      integer :: length, status, value
+      if (update_sample < 0) then
+         update_sample = UPDATE_SAMPLE_DEFAULT
+         call get_environment_variable("ALF_UPDATE_SAMPLE", text, length, status)
+         if (status == 0 .and. length > 0) then
+            read (text(1:length), *, iostat=status) value
+            if (status == 0 .and. value >= 0) update_sample = value
+         endif
+      endif
+      update_sample_stride = update_sample
+   end function update_sample_stride
 
 !--------------------------------------------------------------------
 !> @author
@@ -138,6 +174,11 @@ module upgrade_mod
         Complex (Kind=Kind(0.D0)), Dimension(:, :), Allocatable :: Zarr, grarr
         Complex (Kind=Kind(0.D0)), Dimension(:), Allocatable :: sxv, syu
 
+        ! Update timer; see UPDATE_SAMPLE_DEFAULT.
+        Logical :: update_timed
+        Integer :: update_stride
+        Integer (Kind=Kind(0.d0)) :: update_c0, update_c1, update_rate
+
         toggle = .false.
         ! if ( abs(OP_V(n_op,1)%g) < 1.D-12 )   return
 
@@ -224,6 +265,16 @@ module upgrade_mod
            If ( str_to_upper(mode) == "FINAL"  )  Phase = Phase * Ratiotot/sqrt(Ratiotot*conjg(Ratiotot))
            !Write(6,*) 'Accepted : ', Ratiotot
 
+           ! Time the block below on a sample of updates. The clock brackets
+           ! exactly what a delayed (rank-k) scheme would replace -- the row
+           ! reads, the column gather and the rank-d update of the whole Green's
+           ! function -- and nothing else, which is what makes the share it
+           ! reports comparable with delayed_update.f90's speedup.
+           update_calls  = update_calls + 1
+           update_stride = update_sample_stride()
+           update_timed  = update_stride > 0 .and. mod(update_calls, update_stride) == 0
+           if (update_timed) call system_clock(update_c0)
+
            Do nf_eff = 1,N_FL_eff
               nf=Calc_Fl_map(nf_eff)
               ! Setup u(i,n), v(n,i)
@@ -282,6 +333,22 @@ module upgrade_mod
               endif
 
            enddo
+
+           if (update_timed) then
+              call system_clock(update_c1, update_rate)
+              ! A wrapped counter would add a spurious huge sample; drop it
+              ! rather than reconstructing it, since one lost sample in
+              ! thousands costs nothing and a corrupted accumulator is
+              ! unrecoverable.
+              if (update_c1 >= update_c0) then
+                 call Control_update(.true., &
+                      dble(update_c1 - update_c0)/dble(update_rate))
+              else
+                 call Control_update(.false., 0.d0)
+              endif
+           else
+              call Control_update(.false., 0.d0)
+           endif
 
            ! Flip the spin
            nsigma%f(n_op,nt) = nsigma_new%f(1,1) ! real(ns_new,Kind=kind(0.d0))
