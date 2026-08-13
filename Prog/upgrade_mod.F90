@@ -43,12 +43,20 @@ module upgrade_mod
    ! while still accumulating thousands of samples per bin.
    !
    ! Prime, so the sample does not alias with the per-slice operator count and
-   ! keep landing at the same point in the sweep. ALF_UPDATE_SAMPLE overrides
-   ! it: 1 times every update, which is the cross-check that the sampling is
-   ! unbiased, and 0 disables the timing entirely.
+   ! keep landing at the same point in the sweep. Precisely: the sampled
+   ! positions are equidistributed over a period P only when gcd(61, P) = 1, so
+   ! primality buys this for every P that is not a multiple of 61 rather than
+   ! for every P -- an L1*L2 or 3*Ndim of 61, 122, ... would still alias. No
+   ! lattice in either grid is one, and the accept/reject draw decorrelates it
+   ! further. ALF_UPDATE_SAMPLE overrides it: 1 times every update, which is the
+   ! cross-check that the sampling is unbiased, and 0 disables the timing.
    integer, parameter, private :: UPDATE_SAMPLE_DEFAULT = 61
    integer, private, save :: update_sample = -1
-   integer, private, save :: update_calls = 0
+   ! 64-bit: flat-band L=24 does 3*Ndim = 3456 vertices per slice, so a long
+   ! production segment passes 2**31 accepted updates and a default integer
+   ! would overflow. Signed overflow is undefined, and this compiler is already
+   ! known to constant-fold wrap-dependent arithmetic at -O3.
+   Integer (Kind=Kind(0.d0)), private, save :: update_calls = 0
 
    contains
 
@@ -272,7 +280,9 @@ module upgrade_mod
            ! reports comparable with delayed_update.f90's speedup.
            update_calls  = update_calls + 1
            update_stride = update_sample_stride()
-           update_timed  = update_stride > 0 .and. mod(update_calls, update_stride) == 0
+           ! Kinds must match in MOD; update_calls is 64-bit against overflow.
+           update_timed  = update_stride > 0 .and. &
+                & mod(update_calls, Int(update_stride, Kind(0.d0))) == 0
            if (update_timed) call system_clock(update_c0)
 
            Do nf_eff = 1,N_FL_eff
