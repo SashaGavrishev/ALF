@@ -277,6 +277,69 @@ EOF
   return 1
 }
 
+# Set DFTI_FLAGS (-DALF_MKL_DFTI plus an include path) and DFTI_OBJ, or leave both
+# empty. Called only when the chosen BLAS/LAPACK is MKL.
+#
+# The flat-band Hamiltonian's momentum-space JxJx transforms both cell indices of an
+# Ndim x Ndim matrix twice per imaginary-time slice. MKL's DFTI runs that on the natural
+# strides, where ZGEMM needs the contracted axis leading and so needs a permutation; from
+# L = 16 up that is worth 2-2.5x on the transform packed. Without the module the
+# Hamiltonian keeps its portable separable-ZGEMM transform and produces the same numbers,
+# so a failure here is a warning, not an error.
+#
+# Finding mkl_dfti.mod is the fiddly part and -qmkl does not put it on the module path.
+# MKL ships the module *source* at $MKLROOT/include/mkl_dfti.f90 and precompiles it per
+# compiler and integer width into a subdirectory whose name has moved between releases --
+# include/intel64/lp64 for years, include/mkl/... under the restructured oneAPI layout.
+# So: look in the known places, then search, and failing both compile the shipped source,
+# which is always present and always matches this compiler because we just built it with
+# it. That last case also produces an object: mkl_dfti.f90 is not purely interfaces in
+# every release, and a missing module procedure surfaces as an undefined symbol at link
+# rather than as anything mentioning DFTI.
+set_dfti_flags()
+{
+  DFTI_FLAGS=""
+  DFTI_OBJ=""
+  if [ -z "${MKLROOT:-}" ]; then
+    printf "${RED}Warning: MKLROOT unset; building without MKL DFTI.${NC}\n" 1>&2
+    return 1
+  fi
+  for dfti_cand in \
+    "$MKLROOT/include/mkl/intel64/lp64" \
+    "$MKLROOT/include/intel64/lp64" \
+    "$MKLROOT/include/mkl" \
+    "$MKLROOT/include"; do
+    if [ -f "$dfti_cand/mkl_dfti.mod" ]; then
+      DFTI_FLAGS="-DALF_MKL_DFTI -I$dfti_cand"
+      printf "\nMKL DFTI module: %s\n" "$dfti_cand"
+      return 0
+    fi
+  done
+  dfti_found=$(find "$MKLROOT" -name mkl_dfti.mod 2>/dev/null | head -1)
+  if [ -n "$dfti_found" ]; then
+    DFTI_FLAGS="-DALF_MKL_DFTI -I$(dirname "$dfti_found")"
+    printf "\nMKL DFTI module: %s (found)\n" "$(dirname "$dfti_found")"
+    return 0
+  fi
+  for dfti_cand in "$MKLROOT/include/mkl_dfti.f90" "$MKLROOT/include/mkl/mkl_dfti.f90"; do
+    [ -r "$dfti_cand" ] || continue
+    dfti_dir="$ALF_DIR/.alf-dfti"
+    mkdir -p "$dfti_dir" || continue
+    # The compiler writes the .mod into the working directory, so build it in place.
+    if ( cd "$dfti_dir" && $ALF_FC -O0 -c "$dfti_cand" ) > "$dfti_dir/build.log" 2>&1; then
+      DFTI_FLAGS="-DALF_MKL_DFTI -I$dfti_dir"
+      DFTI_OBJ="$dfti_dir/mkl_dfti.o"
+      printf "\nMKL DFTI module: compiled from %s\n" "$dfti_cand"
+      return 0
+    fi
+    printf "${RED}Warning: could not compile %s; see %s${NC}\n" "$dfti_cand" "$dfti_dir/build.log" 1>&2
+    break
+  done
+  printf "${RED}Warning: no MKL DFTI Fortran module under %s;${NC}\n" "$MKLROOT" 1>&2
+  printf "${RED}  the flat-band JxJx transform falls back to its portable ZGEMM form.${NC}\n" 1>&2
+  return 1
+}
+
 # AOCL (AMD BLIS + libFLAME) in place of MKL's BLAS/LAPACK. Sets
 # AOCL_BLAS_LAPACK. libFLAME comes first: it provides LAPACK and calls into
 # BLIS for BLAS.
@@ -925,9 +988,14 @@ if [ -n "${ALF_INC_EXT+x}" ]; then
   printf "\nAppending additional include directory '%s'\n" "${ALF_INC_EXT}"
 fi
 
+case "${LIB_BLAS_LAPACK}" in
+  *mkl* | *MKL*) set_dfti_flags ;;
+  *) DFTI_FLAGS=""; DFTI_OBJ="" ;;
+esac
+
 Libs="$ALF_DIR/Libraries"
 ALF_INC="-I${Libs}/Modules ${ALF_INC_EXT}"
-ALF_LIB="${Libs}/Modules/modules_90.a ${LIB_BLAS_LAPACK} ${Libs}/libqrref/libqrref.a ${ALF_LIB_EXT}"
+ALF_LIB="${Libs}/Modules/modules_90.a ${LIB_BLAS_LAPACK} ${Libs}/libqrref/libqrref.a ${DFTI_OBJ} ${ALF_LIB_EXT}"
 
 if [ "${HDF5_ENABLED}" = "1" ]; then
   echo; echo "HDF5 enabled"
@@ -949,7 +1017,7 @@ ALF_FLAGS_QRREF="${F90OPTFLAGS} ${ALF_FLAGS_EXT}"
 # Modules need to know the programm configuration since entanglement needs MPI
 ALF_FLAGS_MODULES="${F90OPTFLAGS} ${PROGRAMMCONFIGURATION} ${ALF_FLAGS_EXT}"
 ALF_FLAGS_ANA="${F90USEFULFLAGS} ${F90OPTFLAGS} ${ALF_INC} ${ALF_FLAGS_EXT}"
-ALF_FLAGS_PROG="${F90USEFULFLAGS} ${F90OPTFLAGS} ${PROGRAMMCONFIGURATION} ${ALF_INC} ${ALF_FLAGS_EXT}"
+ALF_FLAGS_PROG="${F90USEFULFLAGS} ${F90OPTFLAGS} ${PROGRAMMCONFIGURATION} ${ALF_INC} ${DFTI_FLAGS} ${ALF_FLAGS_EXT}"
 # Control with flags -DHDF5 -DHDF5_ZLIB -DOBS_LEGACY, which observable format to use
 if [ "${HDF5_ENABLED}" = "1" ]; then
   ALF_FLAGS_MODULES="${ALF_FLAGS_MODULES} ${INC_HDF5} -DHDF5 -DHDF5_ZLIB"

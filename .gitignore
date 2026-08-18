@@ -27,3 +27,6 @@ testsuite/tests/
 .deps.mk
 Prog/.echo_compile_mods
 Prog/.parse_parameters
+
+# JxJx DFTI module built from MKL sources by configure.sh
+.alf-dfti/
