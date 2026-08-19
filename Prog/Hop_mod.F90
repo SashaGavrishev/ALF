@@ -54,12 +54,37 @@
       Use ContainerElementBase_mod
       Use OpTTypes_mod
       Use OpT_time_dependent_mod
+      Use Control
       use iso_fortran_env, only: output_unit, error_unit
 
       ! Private variables
       Type(DynamicMatrixArray), private, allocatable :: ExpOpT_vec(:) ! for now we have for simplicity for each flavour a vector
       Integer, private, save ::  Ncheck
       Real (Kind=Kind(0.d0)), private, save  :: Zero
+
+      ! Wall-clock accounting for the hopping propagator; see Control_hop.
+      !
+      ! Deliberately *not* sampled, unlike the Green's-function update timer.
+      ! There are ~19 applications per time slice against ~3*Ndim accepted
+      ! updates, and each one propagates the whole Ndim x Ndim matrix, so a
+      ! clock read costs a few parts in 10^5 here where it cost a percent in
+      ! upgrade_mod. Copying the sampling machinery would buy nothing and add a
+      ! stride that could alias. ALF_HOP_TIMER=0 disables the timing outright,
+      ! for a run that wants the counters untouched.
+      !
+      ! The bracket covers the loop over Op_T and nothing else, so it measures
+      ! exactly what a different propagator representation would replace -- a
+      ! checkerboard decomposition, or a momentum-space transform. Hop_mod_Symm's
+      ! Out = In copy stays outside it, because that copy survives any such
+      ! change and charging it here would inflate the share a change can win.
+      !
+      ! One saved start time, so the bracket must not nest or run concurrently.
+      ! Neither happens today: these routines are leaves, and no caller wraps
+      ! them in an OpenMP region (the -fopenmp here is for threaded BLAS, which
+      ! is inside the bracket rather than around it). A future parallel sweep
+      ! would need this per thread.
+      Integer, private, save :: hop_timer = -1
+      Integer (Kind=Kind(0.d0)), private, save :: hop_c0
 
       Contains
 
@@ -141,6 +166,53 @@
         end subroutine Hop_mod_init
 
 !--------------------------------------------------------------------
+!> @brief
+!> Whether the hopping propagator is timed, read once from ALF_HOP_TIMER.
+!--------------------------------------------------------------------
+        Logical function hop_timing()
+          Implicit none
+          character(len=32) :: text
+          integer :: length, status, value
+          if (hop_timer < 0) then
+             hop_timer = 1
+             call get_environment_variable("ALF_HOP_TIMER", text, length, status)
+             if (status == 0 .and. length > 0) then
+                read (text(1:length), *, iostat=status) value
+                if (status == 0 .and. value == 0) hop_timer = 0
+             endif
+          endif
+          hop_timing = hop_timer > 0
+        end function hop_timing
+
+!--------------------------------------------------------------------
+
+        Subroutine hop_tic()
+          Implicit none
+          if (hop_timing()) call system_clock(hop_c0)
+        end Subroutine hop_tic
+
+!--------------------------------------------------------------------
+!> @brief
+!> Close the bracket opened by hop_tic and book the interval.
+!> @details
+!> A wrapped counter would add a spurious huge sample; the application is still
+!> counted but without a time, exactly as upgrade_mod handles the same case, so
+!> the scale-up in Control stays consistent rather than being skewed by one
+!> corrupt interval.
+!--------------------------------------------------------------------
+        Subroutine hop_toc()
+          Implicit none
+          Integer (Kind=Kind(0.d0)) :: c1, rate
+          if (.not. hop_timing()) return
+          call system_clock(c1, rate)
+          if (c1 >= hop_c0) then
+             call Control_hop(.true., dble(c1 - hop_c0)/dble(rate))
+          else
+             call Control_hop(.false., 0.d0)
+          endif
+        end Subroutine hop_toc
+
+!--------------------------------------------------------------------
 
         Subroutine Hop_mod_mmthr(In,nf, t)
 
@@ -155,10 +227,12 @@
           Integer :: nc
           class(ContainerElementBase), pointer :: dummy
 
+          call hop_tic()
           do nc =  Ncheck,1,-1
             dummy => ExpOpT_vec(nf)%at(nc)
             call dummy%lmult(In, t)
           Enddo
+          call hop_toc()
         end Subroutine Hop_mod_mmthr
 
         Subroutine Hop_mod_mmthr_m1(In,nf,t)
@@ -175,10 +249,12 @@
           Integer :: nc
           class(ContainerElementBase), pointer :: dummy
 
+          call hop_tic()
           do nc =  1,Ncheck
             dummy => ExpOpT_vec(nf)%at(nc)
             call dummy%lmultinv(In, t)
           Enddo
+          call hop_toc()
 
         end Subroutine Hop_mod_mmthr_m1
 
@@ -198,10 +274,12 @@
           Integer :: nc
           class(ContainerElementBase), pointer :: dummy
 
+          call hop_tic()
           do nc = 1, Ncheck
             dummy => ExpOpT_vec(nf)%at(nc)
             call dummy%rmult(In, t)
           Enddo
+          call hop_toc()
 
         end Subroutine Hop_mod_mmthl
 
@@ -221,10 +299,12 @@
           Integer :: nc
           class(ContainerElementBase), pointer :: dummy
 
+          call hop_tic()
           do nc =  1, Ncheck
             dummy => ExpOpT_vec(nf)%at(nc)
             call dummy%lmult(In, t)
           Enddo
+          call hop_toc()
 
         end Subroutine Hop_mod_mmthlc
 
@@ -244,10 +324,12 @@
           Integer :: nc
           class(ContainerElementBase), pointer :: dummy
 
+          call hop_tic()
           do nc =  Ncheck,1,-1
             dummy => ExpOpT_vec(nf)%at(nc)
             call dummy%rmultinv(In, t)
           Enddo
+          call hop_toc()
 
         end Subroutine Hop_mod_mmthl_m1
 
@@ -292,10 +374,12 @@
           Out = In
           Do nf_eff = 1, N_FL_eff !size(In,3)
              nf=Calc_Fl_map(nf_eff)
+             call hop_tic()
              do nc =  Ncheck,1,-1
                 dummy => ExpOpT_vec(nf)%at(nc)
                 call dummy%adjointaction(Out(:, :, nf), t1,t2)
              enddo
+             call hop_toc()
           enddo
 
         End Subroutine Hop_mod_Symm

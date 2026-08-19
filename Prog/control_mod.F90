@@ -68,6 +68,17 @@ module Control
     ! around, so the estimate is Time_update * NC_update / NC_update_timed.
     Real    (Kind=Kind(0.d0)), private, save :: Time_update
     Integer (Kind=Kind(0.d0)), private, save :: NC_update, NC_update_timed
+    ! How much of the run is spent applying the hopping propagator e^{-dtau T}
+    ! to a full matrix -- the other candidate for replacement beside the update
+    ! above, and the one a checkerboard decomposition or a momentum-space
+    ! transform would change. Bounded by the same Amdahl argument, so it is
+    ! reported the same way and beside it.
+    !
+    ! Timed on every application rather than on a sample; see Hop_mod for why
+    ! the two brackets differ. NC_hop therefore normally equals NC_hop_timed,
+    ! and a gap between them means intervals were dropped for a wrapped clock.
+    Real    (Kind=Kind(0.d0)), private, save :: Time_hop
+    Integer (Kind=Kind(0.d0)), private, save :: NC_hop, NC_hop_timed
     Integer (Kind=kind(0.d0)),  private, save :: NC_Glob_up, ACC_Glob_up
     Integer (Kind=kind(0.d0)),  private, save :: NC_HMC_up, ACC_HMC_up
     Integer (Kind=kind(0.d0)),  private, save :: NC_Temp_up, ACC_Temp_up
@@ -127,6 +138,10 @@ module Control
         Time_update     = 0.d0
         NC_update       = 0
         NC_update_timed = 0
+
+        Time_hop        = 0.d0
+        NC_hop          = 0
+        NC_hop_timed    = 0
 
         size_clust_Glob_up    = 0.d0
         size_clust_Glob_ACC_up= 0.d0
@@ -216,6 +231,26 @@ module Control
            NC_update_timed = NC_update_timed + 1
         endif
       end Subroutine Control_update
+
+!--------------------------------------------------------------------
+!> @brief
+!> Book one application of the hopping propagator, timed or not.
+!> @details
+!> One call is one bracketed region in Hop_mod, which is one propagation of a
+!> full matrix -- except Hop_mod_Symm, whose region carries the two-sided
+!> adjoint action and so contains two multiplications. The share is unaffected;
+!> only NC_hop reads low against a per-multiplication count.
+!--------------------------------------------------------------------
+      Subroutine Control_hop(timed, seconds)
+        Implicit none
+        Logical, Intent(In) :: timed
+        Real (Kind=Kind(0.d0)), Intent(In) :: seconds
+        NC_hop = NC_hop + 1
+        if (timed) then
+           Time_hop     = Time_hop + seconds
+           NC_hop_timed = NC_hop_timed + 1
+        endif
+      end Subroutine Control_hop
 
       Subroutine Control_upgrade_Temp(toggle)
         Implicit none
@@ -396,9 +431,9 @@ module Control
         Character (len=64) :: file1
         Real (Kind=Kind(0.d0)) :: Time, Acc, Acc_eff, Acc_Glob, Acc_Temp, size_clust_Glob, size_clust_Glob_ACC, Acc_HMC
         Real (Kind=Kind(0.d0)) :: Update_time, Update_share
+        Real (Kind=Kind(0.d0)) :: Hop_time, Hop_share
 #ifdef MPI
         REAL (Kind=Kind(0.d0))  :: X
-        Integer        :: Ierr, Isize, Irank, irank_g, isize_g, igroup
 
         CALL MPI_COMM_SIZE(MPI_COMM_WORLD,ISIZE,IERR)
         CALL MPI_COMM_RANK(MPI_COMM_WORLD,IRANK,IERR)
@@ -442,6 +477,16 @@ module Control
            Update_time = Time_update * dble(NC_update)/dble(NC_update_timed)
            if (Time > 0.d0) Update_share = Update_time/Time
         endif
+
+        ! Same scale-up as above, which is the identity while every application
+        ! is timed. It is written out anyway so that dropped intervals -- or a
+        ! future decision to sample this bracket too -- need no change here.
+        Hop_time  = 0.d0
+        Hop_share = 0.d0
+        if (NC_hop_timed > 0) then
+           Hop_time = Time_hop * dble(NC_hop)/dble(NC_hop_timed)
+           if (Time > 0.d0) Hop_share = Hop_time/Time
+        endif
         If (str_to_upper(Global_update_scheme) == "LANGEVIN") Force_mean =  Force_mean/real(Force_count,kind(0.d0)) 
         
 #if defined(MPI)
@@ -468,6 +513,12 @@ module Control
         X = 0.d0
         CALL MPI_REDUCE(Update_share,X,1,MPI_REAL8,MPI_SUM, 0,Group_Comm,IERR)
         Update_share = X/dble(Isize_g)
+        X = 0.d0
+        CALL MPI_REDUCE(Hop_time,X,1,MPI_REAL8,MPI_SUM, 0,Group_Comm,IERR)
+        Hop_time = X/dble(Isize_g)
+        X = 0.d0
+        CALL MPI_REDUCE(Hop_share,X,1,MPI_REAL8,MPI_SUM, 0,Group_Comm,IERR)
+        Hop_share = X/dble(Isize_g)
         X = 0.d0
         CALL MPI_REDUCE(ACC_Glob,X,1,MPI_REAL8,MPI_SUM, 0,Group_Comm,IERR)
         ACC_Glob = X/dble(Isize_g)
@@ -548,6 +599,11 @@ module Control
               Write(50,*) ' Green update time          : ', Update_time
               Write(50,*) ' Green update share         : ', Update_share
               Write(50,*) ' Green updates timed        : ', NC_update_timed
+           Endif
+           If ( NC_hop_timed > 0 ) then
+              Write(50,*) ' Hopping applications       : ', NC_hop
+              Write(50,*) ' Hopping time               : ', Hop_time
+              Write(50,*) ' Hopping share              : ', Hop_share
            Endif
 #if defined(TEMPERING)
            Write(50,*) ' Acceptance Tempering       : ', ACC_Temp
