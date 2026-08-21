@@ -47,6 +47,10 @@ endforeach(iter)
 
 foreach(iter ${delayedtests})
 target_link_libraries(${iter} ${CMAKE_CURRENT_SOURCE_DIR}/../../Prog/delayed_update_mod.o)
+# ALF_DELAY_VERIFY books its discrepancies through Control, so the module is no
+# longer free of it. Still far short of Hamiltonian_main, which is what would
+# drag most of ALF into this link.
+target_link_libraries(${iter} ${CMAKE_CURRENT_SOURCE_DIR}/../../Prog/control_mod.o)
 target_link_libraries(${iter} ${CMAKE_CURRENT_SOURCE_DIR}/../../Prog/Operator_mod.o ${CMAKE_CURRENT_SOURCE_DIR}/../../Prog/Fields_mod.o)
 endforeach(iter)
 

@@ -58,7 +58,7 @@ Program DelayedPanels
    g_start = GR(:,:,1)
 
    Call delay_alloc(Ndim, N_FL, dmax)
-   Call delay_open()
+   Call delay_open(GR)
 
    If (.not. delay_active()) Then
       Write (*,*) "ERROR: delay_open did not open a region"

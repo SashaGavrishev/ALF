@@ -272,11 +272,16 @@ contains
       implicit none
       integer, intent(in) :: Ndim, N_FL, dmax
 
+      ! Recorded even when the delay is off, because the GR dummies above are
+      ! declared with them. delay_open and delay_close are called on every slice
+      ! regardless, and a dummy shaped from a stale zero would be wrong before
+      ! the early return ever ran.
+      ndim_s = Ndim
+      nfl_s  = N_FL
+
       kmax = delay_depth(Ndim)
       if (kmax <= 0) return
 
-      ndim_s  = Ndim
-      nfl_s   = N_FL
       panel_w = kmax + max(dmax, 1)
       allocate (xp(Ndim, panel_w, N_FL), yp(Ndim, panel_w, N_FL))
       allocate (ncol(N_FL))
@@ -301,7 +306,12 @@ contains
 !--------------------------------------------------------------------
    subroutine delay_open(GR)
       implicit none
-      Complex (Kind=Kind(0.d0)), intent(in) :: GR(:,:,:)
+      ! Explicit shape, not assumed shape. These are handed element-first to
+      ! ZGEMM and ZCOPY, which have no explicit interface, and sequence
+      ! association from an assumed-shape actual is not something the standard
+      ! guarantees -- a compiler may pass a descriptor or a copy. upgrade_mod
+      ! declares the same array the same way for the same reason.
+      Complex (Kind=Kind(0.d0)), intent(in) :: GR(ndim_s, ndim_s, nfl_s)
       if (kmax <= 0) return
       ncol   = 0
       active = .true.
@@ -319,7 +329,12 @@ contains
 !--------------------------------------------------------------------
    subroutine delay_close(GR)
       implicit none
-      Complex (Kind=Kind(0.d0)), intent(inout) :: GR(:,:,:)
+      ! Explicit shape, not assumed shape. These are handed element-first to
+      ! ZGEMM and ZCOPY, which have no explicit interface, and sequence
+      ! association from an assumed-shape actual is not something the standard
+      ! guarantees -- a compiler may pass a descriptor or a copy. upgrade_mod
+      ! declares the same array the same way for the same reason.
+      Complex (Kind=Kind(0.d0)), intent(inout) :: GR(ndim_s, ndim_s, nfl_s)
       integer :: nf
       real (Kind=Kind(0.d0)) :: worst
       if (.not. active) return
@@ -346,7 +361,12 @@ contains
    subroutine delay_flush(nf, GR)
       implicit none
       integer, intent(in) :: nf
-      Complex (Kind=Kind(0.d0)), intent(inout) :: GR(:,:,:)
+      ! Explicit shape, not assumed shape. These are handed element-first to
+      ! ZGEMM and ZCOPY, which have no explicit interface, and sequence
+      ! association from an assumed-shape actual is not something the standard
+      ! guarantees -- a compiler may pass a descriptor or a copy. upgrade_mod
+      ! declares the same array the same way for the same reason.
+      Complex (Kind=Kind(0.d0)), intent(inout) :: GR(ndim_s, ndim_s, nfl_s)
       Complex (Kind=Kind(0.d0)) :: one
       if (kmax <= 0) return
       if (ncol(nf) <= 0) return
@@ -368,7 +388,12 @@ contains
    subroutine delay_block(nf, GR, P, d, blk)
       implicit none
       integer, intent(in) :: nf, d, P(d)
-      Complex (Kind=Kind(0.d0)), intent(in)  :: GR(:,:,:)
+      ! Explicit shape, not assumed shape. These are handed element-first to
+      ! ZGEMM and ZCOPY, which have no explicit interface, and sequence
+      ! association from an assumed-shape actual is not something the standard
+      ! guarantees -- a compiler may pass a descriptor or a copy. upgrade_mod
+      ! declares the same array the same way for the same reason.
+      Complex (Kind=Kind(0.d0)), intent(in)  :: GR(ndim_s, ndim_s, nfl_s)
       Complex (Kind=Kind(0.d0)), intent(out) :: blk(d,d)
       real (Kind=Kind(0.d0)) :: worst
       integer :: n, m, c
@@ -407,7 +432,12 @@ contains
    subroutine delay_row(nf, GR, P, d, rows)
       implicit none
       integer, intent(in) :: nf, d, P(d)
-      Complex (Kind=Kind(0.d0)), intent(in)  :: GR(:,:,:)
+      ! Explicit shape, not assumed shape. These are handed element-first to
+      ! ZGEMM and ZCOPY, which have no explicit interface, and sequence
+      ! association from an assumed-shape actual is not something the standard
+      ! guarantees -- a compiler may pass a descriptor or a copy. upgrade_mod
+      ! declares the same array the same way for the same reason.
+      Complex (Kind=Kind(0.d0)), intent(in)  :: GR(ndim_s, ndim_s, nfl_s)
       Complex (Kind=Kind(0.d0)), intent(out) :: rows(ndim_s, d)
       Complex (Kind=Kind(0.d0)) :: one, tmp(max(ncol(nf),1))
       real (Kind=Kind(0.d0)) :: worst
@@ -441,7 +471,12 @@ contains
    subroutine delay_col(nf, GR, P, d, cols)
       implicit none
       integer, intent(in) :: nf, d, P(d)
-      Complex (Kind=Kind(0.d0)), intent(in)  :: GR(:,:,:)
+      ! Explicit shape, not assumed shape. These are handed element-first to
+      ! ZGEMM and ZCOPY, which have no explicit interface, and sequence
+      ! association from an assumed-shape actual is not something the standard
+      ! guarantees -- a compiler may pass a descriptor or a copy. upgrade_mod
+      ! declares the same array the same way for the same reason.
+      Complex (Kind=Kind(0.d0)), intent(in)  :: GR(ndim_s, ndim_s, nfl_s)
       Complex (Kind=Kind(0.d0)), intent(out) :: cols(ndim_s, d)
       Complex (Kind=Kind(0.d0)) :: one, tmp(max(ncol(nf),1))
       real (Kind=Kind(0.d0)) :: worst
@@ -478,7 +513,12 @@ contains
       integer, intent(in) :: nf, d
       Complex (Kind=Kind(0.d0)), intent(in)    :: alpha
       Complex (Kind=Kind(0.d0)), intent(in)    :: xcols(ndim_s, d), ycols(ndim_s, d)
-      Complex (Kind=Kind(0.d0)), intent(inout) :: GR(:,:,:)
+      ! Explicit shape, not assumed shape. These are handed element-first to
+      ! ZGEMM and ZCOPY, which have no explicit interface, and sequence
+      ! association from an assumed-shape actual is not something the standard
+      ! guarantees -- a compiler may pass a descriptor or a copy. upgrade_mod
+      ! declares the same array the same way for the same reason.
+      Complex (Kind=Kind(0.d0)), intent(inout) :: GR(ndim_s, ndim_s, nfl_s)
       Complex (Kind=Kind(0.d0)) :: one
       integer :: l, c
       c = ncol(nf)
