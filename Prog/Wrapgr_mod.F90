@@ -147,7 +147,7 @@ Contains
     ! the caller returns. Everything downstream -- stabilisation, measurement,
     ! global moves -- therefore sees an ordinary Green's function and needs no
     ! change. No-op when the delay is disabled.
-    call delay_open()
+    call delay_open(GR)
     Do n = Nt_sequential_start,Nt_sequential_end
        Do nf_eff = 1, N_FL_eff
           nf=Calc_Fl_map(nf_eff)
@@ -236,7 +236,7 @@ Contains
     
     ! Mirror of WRAPGRUP: the region spans the sequential loop only, opening after
     ! the global-in-tau moves above and closing before the propagator below.
-    call delay_open()
+    call delay_open(GR)
     Do n =  Nt_sequential_end, Nt_sequential_start, -1
        N_type = 2
        nf = 1

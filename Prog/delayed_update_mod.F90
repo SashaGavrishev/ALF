@@ -75,7 +75,7 @@ module delayed_update_mod
    public :: delay_alloc, delay_dealloc, delay_depth, delay_active
    public :: delay_assert_inactive, delay_open, delay_close
    public :: delay_block, delay_row, delay_col, delay_append, delay_flush
-   public :: delay_wrap, delay_pending
+   public :: delay_wrap, delay_pending, delay_verify_on
 
    ! Panels and their live column count, one set per flavour. Allocated once
    ! beside Wrapgr_alloc rather than per slice: at Ndim = 2048, k = 32, dmax = 2
@@ -94,6 +94,36 @@ module delayed_update_mod
    Integer, private, save :: k_request = -2
    Integer, private, parameter :: K_AUTO = -1
    Integer, private, parameter :: K_UNREAD = -2
+
+   ! ALF_DELAY_VERIFY: carry a second Green's function through the slice, updated
+   ! immediately, and compare the two when the region closes.
+   !
+   ! This is the instrument for the one risk the cost model explicitly does not
+   ! measure. The immediate scheme reads an exactly updated row and column; the
+   ! delayed one reconstructs them as a stale value plus c panel products, and
+   ! cancellation there is the failure mode -- sharpest at
+   ! v(P(n),n) = 1 - G(P(n),P(n)) and at the reciprocal in the Woodbury solve,
+   ! where a small denominator amplifies whatever the reconstruction carried in.
+   !
+   ! An end-to-end run already answers "did the physics change"; what this adds
+   ! is *where*, per reconstruction, so a discrepancy that grows with k or with
+   ! Ndim can be seen growing rather than inferred from a final observable.
+   !
+   ! **The comparison is at the accessors, not at the flush.** Comparing the
+   ! flushed matrix against the shadow measures nothing: the shadow is fed the
+   ! same update columns the delayed arm computed, so a wrong reconstruction
+   ! sends both the same way and they agree while both are wrong. Verified by
+   ! mutation -- deleting the row correction left the flush comparison at 3e-16.
+   ! What has to be checked is each reconstructed row, column and block against
+   ! the shadow *at the moment it is handed out*, which is the quantity the
+   ! Woodbury solve then consumes.
+   !
+   ! Development only, and off by default: it applies every update twice, wraps a
+   ! second full matrix per vertex and compares a row and a column per accepted
+   ! flip, so it is slower than the immediate scheme it exists to check.
+   Logical, private, save :: verify      = .false.
+   Logical, private, save :: verify_read = .false.
+   Complex (Kind=Kind(0.d0)), private, save, allocatable :: gshadow(:,:,:)
 
 contains
 
@@ -147,6 +177,44 @@ contains
          delay_depth = k_request
       endif
    end function delay_depth
+
+!--------------------------------------------------------------------
+!> @brief
+!> Whether the shadow Green's function is being carried; see `verify`.
+!--------------------------------------------------------------------
+   logical function delay_verify_on()
+      implicit none
+      character(len=32) :: text
+      integer :: length, status, value
+      if (.not. verify_read) then
+         verify_read = .true.
+         verify = .false.
+         call get_environment_variable("ALF_DELAY_VERIFY", text, length, status)
+         if (status == 0 .and. length > 0) then
+            read (text(1:length), *, iostat=status) value
+            if (status == 0 .and. value > 0) verify = .true.
+         endif
+      endif
+      delay_verify_on = verify
+   end function delay_verify_on
+
+!--------------------------------------------------------------------
+!> @brief
+!> Book one reconstruction discrepancy, scaled by the matrix it came from.
+!> @details
+!> Relative rather than absolute, so the figure is comparable across sizes,
+!> slices and flavours -- which is the point, since the question is whether it
+!> grows with k or with Ndim.
+!--------------------------------------------------------------------
+   subroutine verify_book(nf, worst)
+      use Control, only: Control_delay_verify
+      implicit none
+      integer, intent(in) :: nf
+      real (Kind=Kind(0.d0)), intent(in) :: worst
+      real (Kind=Kind(0.d0)) :: scale
+      scale = maxval(abs(gshadow(:,:,nf)))
+      call Control_delay_verify(worst/max(scale, 1.d-300))
+   end subroutine verify_book
 
 !--------------------------------------------------------------------
 !> @brief
@@ -214,13 +282,15 @@ contains
       allocate (ncol(N_FL))
       ncol   = 0
       active = .false.
+      if (delay_verify_on()) allocate (gshadow(Ndim, Ndim, N_FL))
    end subroutine delay_alloc
 
    subroutine delay_dealloc()
       implicit none
-      if (allocated(xp))   deallocate (xp)
-      if (allocated(yp))   deallocate (yp)
-      if (allocated(ncol)) deallocate (ncol)
+      if (allocated(xp))      deallocate (xp)
+      if (allocated(yp))      deallocate (yp)
+      if (allocated(ncol))    deallocate (ncol)
+      if (allocated(gshadow)) deallocate (gshadow)
       kmax   = 0
       active = .false.
    end subroutine delay_dealloc
@@ -229,11 +299,15 @@ contains
 !> @brief
 !> Open a factored region. No-op when the delay is disabled.
 !--------------------------------------------------------------------
-   subroutine delay_open()
+   subroutine delay_open(GR)
       implicit none
+      Complex (Kind=Kind(0.d0)), intent(in) :: GR(:,:,:)
       if (kmax <= 0) return
       ncol   = 0
       active = .true.
+      ! The shadow starts from the same matrix and is then carried forward by
+      ! the immediate scheme, so any divergence at delay_close is the delay's.
+      if (verify) gshadow = GR
    end subroutine delay_open
 
 !--------------------------------------------------------------------
@@ -247,10 +321,21 @@ contains
       implicit none
       Complex (Kind=Kind(0.d0)), intent(inout) :: GR(:,:,:)
       integer :: nf
+      real (Kind=Kind(0.d0)) :: worst
       if (.not. active) return
       do nf = 1, nfl_s
          call delay_flush(nf, GR)
       enddo
+      if (verify) then
+         ! Only the flush is under test here -- the shadow received the same
+         ! update columns, so this cannot see a bad reconstruction, and the
+         ! accessors are where that is checked. Kept because it does catch a
+         ! dropped or double-counted flush, which the accessors would not.
+         do nf = 1, nfl_s
+            worst = maxval(abs(GR(:,:,nf) - gshadow(:,:,nf)))
+            call verify_book(nf, worst)
+         enddo
+      endif
       active = .false.
    end subroutine delay_close
 
@@ -285,6 +370,7 @@ contains
       integer, intent(in) :: nf, d, P(d)
       Complex (Kind=Kind(0.d0)), intent(in)  :: GR(:,:,:)
       Complex (Kind=Kind(0.d0)), intent(out) :: blk(d,d)
+      real (Kind=Kind(0.d0)) :: worst
       integer :: n, m, c
       c = ncol(nf)
       do m = 1, d
@@ -292,12 +378,22 @@ contains
             blk(n,m) = GR(P(n), P(m), nf)
          enddo
       enddo
-      if (c <= 0) return
-      do m = 1, d
-         do n = 1, d
-            blk(n,m) = blk(n,m) + sum(xp(P(n),1:c,nf)*yp(P(m),1:c,nf))
+      if (c > 0) then
+         do m = 1, d
+            do n = 1, d
+               blk(n,m) = blk(n,m) + sum(xp(P(n),1:c,nf)*yp(P(m),1:c,nf))
+            enddo
          enddo
-      enddo
+      endif
+      if (verify) then
+         worst = 0.d0
+         do m = 1, d
+            do n = 1, d
+               worst = max(worst, abs(blk(n,m) - gshadow(P(n),P(m),nf)))
+            enddo
+         enddo
+         call verify_book(nf, worst)
+      endif
    end subroutine delay_block
 
 !--------------------------------------------------------------------
@@ -314,6 +410,7 @@ contains
       Complex (Kind=Kind(0.d0)), intent(in)  :: GR(:,:,:)
       Complex (Kind=Kind(0.d0)), intent(out) :: rows(ndim_s, d)
       Complex (Kind=Kind(0.d0)) :: one, tmp(max(ncol(nf),1))
+      real (Kind=Kind(0.d0)) :: worst
       integer :: i, l, c
       c   = ncol(nf)
       one = cmplx(1.d0, 0.d0, Kind(0.d0))
@@ -326,6 +423,15 @@ contains
             call ZGEMV('N', ndim_s, c, one, yp(1,1,nf), ndim_s, tmp, 1, one, rows(1,l), 1)
          endif
       enddo
+      if (verify) then
+         worst = 0.d0
+         do l = 1, d
+            do i = 1, ndim_s
+               worst = max(worst, abs(rows(i,l) - gshadow(P(l),i,nf)))
+            enddo
+         enddo
+         call verify_book(nf, worst)
+      endif
    end subroutine delay_row
 
 !--------------------------------------------------------------------
@@ -338,6 +444,7 @@ contains
       Complex (Kind=Kind(0.d0)), intent(in)  :: GR(:,:,:)
       Complex (Kind=Kind(0.d0)), intent(out) :: cols(ndim_s, d)
       Complex (Kind=Kind(0.d0)) :: one, tmp(max(ncol(nf),1))
+      real (Kind=Kind(0.d0)) :: worst
       integer :: l, c
       c   = ncol(nf)
       one = cmplx(1.d0, 0.d0, Kind(0.d0))
@@ -348,6 +455,15 @@ contains
             call ZGEMV('N', ndim_s, c, one, xp(1,1,nf), ndim_s, tmp, 1, one, cols(1,l), 1)
          endif
       enddo
+      if (verify) then
+         worst = 0.d0
+         do l = 1, d
+            do c = 1, ndim_s
+               worst = max(worst, abs(cols(c,l) - gshadow(c,P(l),nf)))
+            enddo
+         enddo
+         call verify_book(nf, worst)
+      endif
    end subroutine delay_col
 
 !--------------------------------------------------------------------
@@ -363,6 +479,7 @@ contains
       Complex (Kind=Kind(0.d0)), intent(in)    :: alpha
       Complex (Kind=Kind(0.d0)), intent(in)    :: xcols(ndim_s, d), ycols(ndim_s, d)
       Complex (Kind=Kind(0.d0)), intent(inout) :: GR(:,:,:)
+      Complex (Kind=Kind(0.d0)) :: one
       integer :: l, c
       c = ncol(nf)
       do l = 1, d
@@ -372,6 +489,13 @@ contains
       enddo
       ncol(nf) = c + d
       if (ncol(nf) >= kmax) call delay_flush(nf, GR)
+      ! The shadow takes the same update immediately -- the arm being compared
+      ! against, and the reason this mode is slower than not delaying at all.
+      if (verify) then
+         one = cmplx(1.d0, 0.d0, Kind(0.d0))
+         call ZGEMM('N', 'T', ndim_s, ndim_s, d, alpha, xcols, ndim_s, &
+            &       ycols, ndim_s, one, gshadow(1,1,nf), ndim_s)
+      endif
    end subroutine delay_append
 
 !--------------------------------------------------------------------
@@ -388,6 +512,16 @@ contains
       Complex (Kind=Kind(0.d0)), intent(in) :: HS_Field
       character(len=1), intent(in) :: updo
       if (.not. active) return
+      ! The shadow is a plain Green's function, so it takes the ordinary wrap --
+      ! and unconditionally, since it must follow the real one whether or not the
+      ! panels currently hold anything.
+      if (verify) then
+         if (updo == 'u' .or. updo == 'U') then
+            call Op_Wrapup(gshadow(:,:,nf), Op, HS_Field, ndim_s, N_Type, nt)
+         else
+            call Op_Wrapdo(gshadow(:,:,nf), Op, HS_Field, ndim_s, N_Type, nt)
+         endif
+      endif
       if (ncol(nf) <= 0) return
       call Op_Wrap_panels(xp(1,1,nf), yp(1,1,nf), Op, HS_Field, ndim_s, &
          &                ncol(nf), N_Type, nt, updo)

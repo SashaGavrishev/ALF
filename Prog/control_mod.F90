@@ -100,6 +100,15 @@ module Control
     ! that changes the arithmetic must leave a trace in the run record.
     Integer, private, save :: Delay_depth_used = 0
 
+    ! Per-slice discrepancy between the factored Green's function and a shadow
+    ! carried by the immediate scheme, under ALF_DELAY_VERIFY. This is the direct
+    ! measurement of how far the reconstruction drifts -- the risk the cost model
+    ! could not price, since it says nothing about how error grows in the
+    ! factored form. Absent from the info file unless the mode was on, because a
+    ! zero and "never measured" must not read alike.
+    Real    (Kind=Kind(0.d0)), private, save :: Delay_err_mean, Delay_err_max
+    Integer (Kind=Kind(0.d0)), private, save :: NC_delay_err
+
     Integer (Kind=kind(0.d0)),  private, save :: NC_Glob_up, ACC_Glob_up
     Integer (Kind=kind(0.d0)),  private, save :: NC_HMC_up, ACC_HMC_up
     Integer (Kind=kind(0.d0)),  private, save :: NC_Temp_up, ACC_Temp_up
@@ -165,6 +174,10 @@ module Control
         NC_hop_timed    = 0
 
         NC_near_tie     = 0
+
+        Delay_err_mean  = 0.d0
+        Delay_err_max   = 0.d0
+        NC_delay_err    = 0
 
         size_clust_Glob_up    = 0.d0
         size_clust_Glob_ACC_up= 0.d0
@@ -279,6 +292,21 @@ module Control
         Integer, Intent(In) :: k
         Delay_depth_used = k
       end Subroutine Control_set_delay_depth
+
+!--------------------------------------------------------------------
+!> @brief
+!> Book one slice's factored-against-immediate discrepancy.
+!> @details
+!> See Delay_err_max. One call is one flavour of one closed region, i.e. one
+!> time slice, so the count says how many slices were checked.
+!--------------------------------------------------------------------
+      Subroutine Control_delay_verify(discrepancy)
+        Implicit none
+        Real (Kind=Kind(0.d0)), Intent(In) :: discrepancy
+        NC_delay_err   = NC_delay_err + 1
+        Delay_err_mean = Delay_err_mean + discrepancy
+        if (discrepancy > Delay_err_max) Delay_err_max = discrepancy
+      end Subroutine Control_delay_verify
 
 !--------------------------------------------------------------------
 !> @brief
@@ -659,6 +687,11 @@ module Control
            ! immediate updates.
            Write(50,*) ' Delay depth                : ', Delay_depth_used
            Write(50,*) ' Metropolis near ties       : ', NC_near_tie
+           If ( NC_delay_err > 0 ) then
+              Write(50,*) ' Delay reconstruction Mean, Max : ', &
+                   &      Delay_err_mean/dble(NC_delay_err), Delay_err_max
+              Write(50,*) ' Delay slices checked       : ', NC_delay_err
+           Endif
 #if defined(TEMPERING)
            Write(50,*) ' Acceptance Tempering       : ', ACC_Temp
 #endif
