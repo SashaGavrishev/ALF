@@ -52,6 +52,7 @@ Module Wrapgr_mod
   Use Hamiltonian_main
   Use Hop_mod
   use upgrade_mod
+  use delayed_update_mod
 
   Implicit none
 
@@ -71,11 +72,40 @@ Contains
     Implicit none
     Allocate (GR_ST(Ndim,Ndim,N_FL) )
   end Subroutine Wrapgr_alloc
-  
+
   Subroutine  Wrapgr_dealloc
     Implicit none
     deallocate ( GR_ST )
   end Subroutine Wrapgr_dealloc
+
+!--------------------------------------------------------------------
+!> @brief
+!> Allocate the delayed update's panels. No-op when the delay is off.
+!> @details
+!> Separate from Wrapgr_alloc, which main only calls when N_Global_tau > 0
+!> because GR_ST exists solely for the multi-flip restore. The panels instead
+!> serve the sequential vertex loop, which runs on every slice regardless, so
+!> this must be called unconditionally.
+!--------------------------------------------------------------------
+  Subroutine Wrapgr_delay_alloc
+    Implicit none
+    Integer :: n, nf, dmax
+    ! Widest wrap support in the model. Op%N, not Op%N_non_zero: the conjugation
+    ! the panels have to follow touches all N rows.
+    dmax = 1
+    do nf = 1, N_FL
+       do n = 1, Size(Op_V,1)
+          if (Op_V(n,nf)%N > dmax) dmax = Op_V(n,nf)%N
+       enddo
+    enddo
+    call delay_alloc(Ndim, N_FL, dmax)
+    call Control_set_delay_depth(delay_depth(Ndim))
+  end Subroutine Wrapgr_delay_alloc
+
+  Subroutine Wrapgr_delay_dealloc
+    Implicit none
+    call delay_dealloc()
+  end Subroutine Wrapgr_delay_dealloc
 
 !--------------------------------------------------------------------
   SUBROUTINE WRAPGRUP(GR,NTAU,PHASE,Propose_S0,Nt_sequential_start, Nt_sequential_end, N_Global_tau)
@@ -112,12 +142,19 @@ Contains
        CALL HOP_MOD_mmthr   (GR(:,:,nf), nf, ntau1 )
        CALL HOP_MOD_mmthl_m1(GR(:,:,nf), nf, ntau1 )
     Enddo
+    ! The factored region spans the sequential loop and nothing else: it opens
+    ! after the propagator above, which reads the whole matrix, and closes before
+    ! the caller returns. Everything downstream -- stabilisation, measurement,
+    ! global moves -- therefore sees an ordinary Green's function and needs no
+    ! change. No-op when the delay is disabled.
+    call delay_open()
     Do n = Nt_sequential_start,Nt_sequential_end
        Do nf_eff = 1, N_FL_eff
           nf=Calc_Fl_map(nf_eff)
-          HS_Field =  nsigma%f(n,ntau1) 
+          HS_Field =  nsigma%f(n,ntau1)
           N_type = 1
           Call Op_Wrapup(Gr(:,:,nf),Op_V(n,nf),HS_Field,Ndim,N_Type,ntau1)
+          call delay_wrap(nf,Op_V(n,nf),HS_Field,N_Type,ntau1,'u')
        enddo
        nf = 1
        T0_proposal       = 1.5D0
@@ -143,10 +180,12 @@ Contains
           nf=Calc_Fl_map(nf_eff)
           N_type =  2
           Call Op_Wrapup(Gr(:,:,nf),Op_V(n,nf),HS_Field,Ndim,N_Type,ntau1)
+          call delay_wrap(nf,Op_V(n,nf),HS_Field,N_Type,ntau1,'u')
        enddo
     Enddo
+    call delay_close(GR)
 
-    If ( N_Global_tau > 0 ) then 
+    If ( N_Global_tau > 0 ) then
        m         = Nt_sequential_end
        !if ( Nt_sequential_start >  Nt_sequential_end ) m = Nt_sequential_start
        Call Wrapgr_Random_update(GR,m,ntau1, PHASE, N_Global_tau )
@@ -195,13 +234,17 @@ Contains
     Endif
 
     
+    ! Mirror of WRAPGRUP: the region spans the sequential loop only, opening after
+    ! the global-in-tau moves above and closing before the propagator below.
+    call delay_open()
     Do n =  Nt_sequential_end, Nt_sequential_start, -1
        N_type = 2
        nf = 1
-       HS_Field = nsigma%f(n,ntau) 
+       HS_Field = nsigma%f(n,ntau)
        do nf_eff = 1,N_FL_eff
           nf=Calc_Fl_map(nf_eff)
           Call Op_Wrapdo( Gr(:,:,nf), Op_V(n,nf), HS_Field, Ndim, N_Type,ntau)
+          call delay_wrap(nf,Op_V(n,nf),HS_Field,N_Type,ntau,'d')
        enddo
        !Write(6,*) 'Upgrade : ', ntau,n 
        nf = 1
@@ -227,13 +270,15 @@ Contains
        !Call Upgrade(GR,n,ntau,PHASE,Op_V(n,1)%N_non_zero) 
        ! The spin has changed after the upgrade!
        nf = 1
-       HS_Field = nsigma%f(n,ntau)  
+       HS_Field = nsigma%f(n,ntau)
        N_type = 1
        do nf_eff = 1,N_FL_eff
           nf=Calc_Fl_map(nf_eff)
           Call Op_Wrapdo( Gr(:,:,nf), Op_V(n,nf), HS_Field, Ndim, N_Type, ntau )
+          call delay_wrap(nf,Op_V(n,nf),HS_Field,N_Type,ntau,'d')
        enddo
     enddo
+    call delay_close(GR)
     DO nf_eff = 1,N_FL_eff
        nf=Calc_Fl_map(nf_eff)
        Call Hop_mod_mmthl   (GR(:,:,nf), nf,ntau)
@@ -267,11 +312,13 @@ Contains
     COMPLEX (Kind=Kind(0.d0)), Dimension(:,:,:), INTENT(INOUT), allocatable :: GR
     Integer, INTENT(IN) :: m,m1, ntau
 
-    !Local 
-    Integer :: n, nf, nf_eff, N_Type 
+    !Local
+    Integer :: n, nf, nf_eff, N_Type
     Complex (Kind=Kind(0.d0)) :: HS_Field
 
-    If (m == m1)  then 
+    call delay_assert_inactive('Wrapgr_PlaceGR')
+
+    If (m == m1)  then
        return
     elseif  ( m1 > m  ) then
        !Write(6,*) "Wrapup from ",  m + 1, "to",  m1, " on tau=",  ntau
@@ -361,6 +408,11 @@ Contains
     Integer,      allocatable :: Flip_list(:)
     Complex (Kind=Kind(0.d0)), allocatable :: Flip_value(:), Flip_value_st(:)
     Real    (Kind=Kind(0.d0)) :: Zero = 10D-8
+
+    ! GR_st = Gr and its restore below copy the whole matrix, which a factored
+    ! Green function would silently corrupt. Both call sites lie outside the
+    ! sequential loop, so this asserts that invariant rather than handling a case.
+    call delay_assert_inactive('Wrapgr_Random_update')
 
     Allocate ( Flip_list(Size(Op_V,1)), Flip_value(Size(Op_V,1)), Flip_value_st(Size(Op_V,1)) )
 

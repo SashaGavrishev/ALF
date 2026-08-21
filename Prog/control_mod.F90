@@ -79,6 +79,27 @@ module Control
     ! and a gap between them means intervals were dropped for a wrapped clock.
     Real    (Kind=Kind(0.d0)), private, save :: Time_hop
     Integer (Kind=Kind(0.d0)), private, save :: NC_hop, NC_hop_timed
+
+    ! How many Metropolis decisions were close enough to their threshold that a
+    ! last-bit difference could have flipped them.
+    !
+    ! A delayed (rank-k) update reassociates the arithmetic without consuming a
+    ! single extra random number, so it replays the *same* Markov chain unless a
+    ! proposal sits within rounding of `Weight > tmp_r`. That makes a trajectory
+    ! comparison between the two schemes a sharp test -- but only if a divergence
+    ! can be told apart from a wrong update. This counter is what tells them
+    ! apart: a chain that diverged with zero near ties took a different decision,
+    ! which is a bug, not reassociation.
+    !
+    ! Rank-local like the other counts; a sum across ranks beside a mean would
+    ! reconstruct nothing.
+    Integer (Kind=Kind(0.d0)), private, save :: NC_near_tie
+
+    ! Delay depth in force, 0 when the delayed update is off. Recorded because
+    ! ALF_DELAY_K is an environment variable rather than a parameter, and a knob
+    ! that changes the arithmetic must leave a trace in the run record.
+    Integer, private, save :: Delay_depth_used = 0
+
     Integer (Kind=kind(0.d0)),  private, save :: NC_Glob_up, ACC_Glob_up
     Integer (Kind=kind(0.d0)),  private, save :: NC_HMC_up, ACC_HMC_up
     Integer (Kind=kind(0.d0)),  private, save :: NC_Temp_up, ACC_Temp_up
@@ -142,6 +163,8 @@ module Control
         Time_hop        = 0.d0
         NC_hop          = 0
         NC_hop_timed    = 0
+
+        NC_near_tie     = 0
 
         size_clust_Glob_up    = 0.d0
         size_clust_Glob_ACC_up= 0.d0
@@ -231,6 +254,31 @@ module Control
            NC_update_timed = NC_update_timed + 1
         endif
       end Subroutine Control_update
+
+!--------------------------------------------------------------------
+!> @brief
+!> Book one Metropolis decision that was within `tol` of its threshold.
+!> @details
+!> See NC_near_tie. The caller decides what "close" means; this only counts.
+!--------------------------------------------------------------------
+      Subroutine Control_near_tie()
+        Implicit none
+        NC_near_tie = NC_near_tie + 1
+      end Subroutine Control_near_tie
+
+!--------------------------------------------------------------------
+!> @brief
+!> Record the delay depth this run is using, for the info file.
+!> @details
+!> Set once at setup, not per update, and deliberately *not* cleared by
+!> Control_init: the depth is a property of the build and environment, and
+!> Control_init runs again just before the bin loop.
+!--------------------------------------------------------------------
+      Subroutine Control_set_delay_depth(k)
+        Implicit none
+        Integer, Intent(In) :: k
+        Delay_depth_used = k
+      end Subroutine Control_set_delay_depth
 
 !--------------------------------------------------------------------
 !> @brief
@@ -605,6 +653,12 @@ module Control
               Write(50,*) ' Hopping time               : ', Hop_time
               Write(50,*) ' Hopping share              : ', Hop_share
            Endif
+           ! Always written, including the 0 of a run with the delay off: a
+           ! missing line and a line reading 0 are the same fact, but only the
+           ! second one distinguishes an old binary from a new one running
+           ! immediate updates.
+           Write(50,*) ' Delay depth                : ', Delay_depth_used
+           Write(50,*) ' Metropolis near ties       : ', NC_near_tie
 #if defined(TEMPERING)
            Write(50,*) ' Acceptance Tempering       : ', ACC_Temp
 #endif

@@ -422,6 +422,10 @@ Program Main
         If (get_N_Global_tau() > 0) then
            Call Wrapgr_alloc
         endif
+        ! Unconditional, unlike GR_ST above: the delayed update's panels serve the
+        ! sequential vertex loop, which runs on every slice whether or not
+        ! global-in-tau moves are enabled. No-op when the delay is off.
+        Call Wrapgr_delay_alloc
         
 #if defined(HDF5)
 #if defined(TEMPERING)
@@ -940,6 +944,7 @@ Program Main
         If (get_N_Global_tau() > 0) then
            Call Wrapgr_dealloc
         endif
+        Call Wrapgr_delay_dealloc
         do nf = 1, N_FL
           do n = 1, size(OP_V,1)
             call Op_clear(Op_V(n,nf),Op_V(n,nf)%N)
