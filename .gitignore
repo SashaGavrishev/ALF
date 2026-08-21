@@ -24,6 +24,8 @@ HDF5/
 environment
 __pycache__/
 testsuite/tests/
+# CMake build tree for the unit tests; created by `cmake -S testsuite -B testsuite/build`.
+testsuite/build/
 .deps.mk
 Prog/.echo_compile_mods
 Prog/.parse_parameters
