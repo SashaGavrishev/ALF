@@ -686,7 +686,13 @@ module Control
            ! second one distinguishes an old binary from a new one running
            ! immediate updates.
            Write(50,*) ' Delay depth                : ', Delay_depth_used
+#ifndef ALF_NO_DELAY
            Write(50,*) ' Metropolis near ties       : ', NC_near_tie
+#endif
+           ! Omitted under ALF_NO_DELAY, where upgrade_mod compiles the pre-delay
+           ! comparison and never calls Control_near_tie. Writing the untouched 0
+           ! would be the one thing the comment above forbids: a count that was
+           ! never taken, reading exactly like a count that came out zero.
            If ( NC_delay_err > 0 ) then
               Write(50,*) ' Delay reconstruction Mean, Max : ', &
                    &      Delay_err_mean/dble(NC_delay_err), Delay_err_max
