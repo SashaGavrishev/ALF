@@ -143,6 +143,7 @@ Program Main
         use wrapul_mod
         use cgr1_mod
         use set_random
+        use green_dump_mod
         use iso8601_datetime_mod
          
 #ifdef HDF5
@@ -784,10 +785,12 @@ Program Main
                           !reconstruction of NOT calculated block!!!
                           If (reconstruction_needed) Call ham%GR_reconstruction( GR_Tilde )
                           CALL ham%Obser( GR_Tilde, PHASE, Ntau1, Mc_step_weight )
+                          call green_dump( GR_Tilde, Ntau1 )
                        else
                           !reconstruction of NOT calculated block!!!
                           If (reconstruction_needed) Call ham%GR_reconstruction( GR )
                           CALL ham%Obser( GR, PHASE, Ntau1, Mc_step_weight  )
+                          call green_dump( GR, Ntau1 )
                        endif
                     ENDIF
                  ENDDO
@@ -814,10 +817,12 @@ Program Main
                           !reconstruction of NOT calculated block!!!
                           If (reconstruction_needed) Call ham%GR_reconstruction( GR_Tilde )
                           CALL ham%Obser( GR_Tilde, PHASE, Ntau1, Mc_step_weight )
+                          call green_dump( GR_Tilde, Ntau1 )
                        else
                           !reconstruction of NOT calculated block!!!
                           If (reconstruction_needed) Call ham%GR_reconstruction( GR )
                           CALL ham%Obser( GR, PHASE, Ntau1,Mc_step_weight )
+                          call green_dump( GR, Ntau1 )
                        endif
                     ENDIF
                     IF ( Stab_nt(NST) == NTAU1 .AND. NTAU1.NE.0 ) THEN
@@ -945,6 +950,7 @@ Program Main
            Call Wrapgr_dealloc
         endif
         Call Wrapgr_delay_dealloc
+        Call green_dump_close
         do nf = 1, N_FL
           do n = 1, size(OP_V,1)
             call Op_clear(Op_V(n,nf),Op_V(n,nf)%N)
