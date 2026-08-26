@@ -134,13 +134,18 @@ contains
 !> ALF_DELAY_K, read once and cached, following ALF_UPDATE_SAMPLE in
 !> upgrade_mod. Unset or "0" disables it -- the default, so a stock build takes
 !> the pre-existing path and reproduces earlier results byte for byte. A positive
-!> integer fixes the depth. "auto" resolves to a power of two near sqrt(Ndim),
-!> which is where the traffic model has its optimum: 8 at Ndim = 72, 16 at 200,
-!> 32 at 1152 and 2048.
+!> integer fixes the depth. "auto" resolves to sqrt(2*Ndim), where the panel cost
+!> k and the amortised flush 2*Ndim/k cross: 12 at Ndim = 72, 20 at 200, 48 at
+!> 1152 and 64 at 2048. Bandwidth multiplies both of those terms and so cancels
+!> between them, which is why the optimum depends on Ndim alone and not on how
+!> the node is packed.
 !>
-!> The auto ladder is provisional -- it encodes a measurement whose magnitudes are
-!> order-of-magnitude only, and is a starting point for a wall-clock sweep rather
-!> than a conclusion.
+!> The clamp [8, 64] guards against an absurd k; it is not a priced bound. What
+!> would set the ceiling properly is the achieved level-3/level-2 rate ratio at
+!> the production point, which puts the flush's compute-bound knee near R/4 --
+!> unmeasured, and the reason the previous ceiling of 32 was worth replacing: it
+!> was reached at both Ndim = 1152 and 2048, so auto returned the ceiling itself
+!> rather than a square root at exactly the sizes this exists for.
 !>
 !> Not a simulation parameter, deliberately: it would enter the parameter hash and
 !> so repoint sim_dir away from existing data, for a knob that changes no physics.
@@ -168,11 +173,11 @@ contains
       endif
 
       if (k_request == K_AUTO) then
-         ! Nearest power of two to sqrt(Ndim), clamped to [8, 32]. Below 8 the
-         ! flush dominates; above 32 the per-proposal ratio correction, which is
-         ! O(d**2*k) and paid on rejected proposals too, starts to bite.
-         k = 2**nint(log(sqrt(real(Ndim, Kind(0.d0))))/log(2.d0))
-         delay_depth = min(32, max(8, k))
+         ! nint(sqrt(2*Ndim)), clamped to [8, 64]. Deliberately not rounded to a
+         ! power of two: k is a flush threshold, not a blocking factor, and no
+         ! BLAS call here wants a particular inner dimension.
+         k = nint(sqrt(2.d0*real(Ndim, Kind(0.d0))))
+         delay_depth = min(64, max(8, k))
       else
          delay_depth = k_request
       endif
