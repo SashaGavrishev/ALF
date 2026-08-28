@@ -14,8 +14,17 @@
 ! this change targets has Op%diag = .true., so a production run never reaches
 ! the ZSLGEMM branches or the N_type = 2 branches at all. Half of
 ! Op_Wrap_panels would otherwise be shipped untested. The sweep below covers
-! every combination of type (1..4), rank (1..4), N_type (1,2), side (u,d) and
-! diagonality, which is all sixteen branches of each wrap.
+! every combination of type (1..4), rank (1..4), N_type (1,2), side (u,d),
+! diagonality and time-dependent coupling, which is all sixteen branches of each
+! wrap.
+!
+! g_t is an axis rather than a detail. When Op%g_t is allocated the wraps take
+! the coupling from it per time slice and build the exponential on the spot,
+! bypassing the E_Exp table the other arms read; Op_Wrap_panels mirrors that in
+! four more branches, and no Hamiltonian in this repository allocates g_t, so
+! without this axis they ship unexecuted. The value below is deliberately not
+! Op%g: a panel arm that ignored g_t and read the table instead would otherwise
+! agree with the reference for the wrong reason.
 !
 ! It is also the drift guard: Op_Wrap_panels reproduces the branch structure of
 ! Op_Wrapup/Op_Wrapdo, and if either is edited without the other they diverge
@@ -32,7 +41,7 @@ Program DelayedWrap
    Complex (Kind=Kind(0.D0)), Dimension(:,:), Allocatable :: xp, yp, xr, yr
    Complex (Kind=Kind(0.D0)) :: one, zero
    Real    (Kind=Kind(0.D0)) :: err, scale, moved
-   Integer :: Ndim, ncols, i, j, n, opn, nt, N_Type, idiag, iud
+   Integer :: Ndim, ncols, i, j, n, opn, nt, N_Type, idiag, iud, igt
    Integer :: nfail
    Character (Len=1) :: updo
    Type (Operator) :: Op
@@ -56,6 +65,7 @@ Program DelayedWrap
    Do idiag = 1, 2
    Do N_Type = 1, 2
    Do iud = 1, 2
+   Do igt = 1, 2
 
       updo = 'u'
       if (iud == 2) updo = 'd'
@@ -87,6 +97,13 @@ Program DelayedWrap
       Op%type  = nt
       Op%g     = cmplx(0.7d0, 0.d0, kind(0.D0))
       Op%alpha = zero
+      ! Before Op_set, which is what latches g_t_alloc (Operator_mod.F90:267).
+      ! Distinct from Op%g so the table arms and the g_t arms cannot agree by
+      ! coincidence.
+      If (igt == 2) Then
+         Allocate (Op%g_t(1))
+         Op%g_t(1) = cmplx(0.41d0, 0.23d0, kind(0.D0))
+      End If
       Call Op_set (Op)
 
       Select Case (nt)
@@ -147,19 +164,24 @@ Program DelayedWrap
       moved = maxval(abs(g_ref - g_before))/max(scale, 1.d-30)
       If (moved < 1.d-6 .and. .not. (N_Type == 2 .and. Op%diag)) Then
          Write (*,*) "NO POWER type", nt, "rank", opn, "N_type", N_Type, &
-            &        "diag", Op%diag, "side ", updo, " moved", moved
+            &        "diag", Op%diag, "side ", updo, " g_t", igt == 2, &
+            &        " moved", moved
          nfail = nfail + 1
       End If
 
       If (err > 1.d-12) Then
          Write (*,*) "ERROR type", nt, "rank", opn, "N_type", N_Type, &
-            &        "diag", Op%diag, "side ", updo, " rel err", err
+            &        "diag", Op%diag, "side ", updo, " g_t", igt == 2, &
+            &        " rel err", err
          nfail = nfail + 1
       End If
 
+      ! Op_clear deallocates g_t when g_t_alloc is set, so the next iteration
+      ! starts from an operator that has none.
       Call Op_clear(Op, opn)
       Deallocate (g_ref, g_pan, g_before, xp, yp, xr, yr)
 
+   End Do
    End Do
    End Do
    End Do
