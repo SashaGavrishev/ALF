@@ -97,6 +97,14 @@ module delayed_update_mod
    Integer, private, parameter :: K_AUTO = -1
    Integer, private, parameter :: K_UNREAD = -2
 
+   ! "formula": the closed form, without probing. The escape hatch for a node
+   ! where the probe's transient Ndim**2 scratch is unaffordable -- every rank of
+   ! a packed node reaches that allocation within a second of the others, and
+   ! under overcommit the failure is not a refused allocation but an unrelated
+   ! chain killed. It is also the A/B control: probe against formula on the same
+   ! point, which "auto" alone cannot express since its fallback is silent.
+   Integer, private, parameter :: K_FORMULA = -3
+
    ! Bounds on the depth "auto" may resolve to. The ceiling is the deepest k
    ! delay_consistency holds to trajectory identity, so it moves only after that
    ! ladder does; see delay_depth.
@@ -240,6 +248,9 @@ contains
             if (trim(adjustl(text(1:length))) == "auto" .or. &
               & trim(adjustl(text(1:length))) == "AUTO") then
                k_request = K_AUTO
+            else if (trim(adjustl(text(1:length))) == "formula" .or. &
+              &      trim(adjustl(text(1:length))) == "FORMULA") then
+               k_request = K_FORMULA
             else
                read (text(1:length), *, iostat=status) value
                if (status == 0 .and. value >= 0) then
@@ -255,7 +266,13 @@ contains
       endif
 
       k_ndim = Ndim
-      if (k_request == K_AUTO) then
+      if (k_request == K_FORMULA) then
+         if (k_resolved == 0) then
+            k_resolved = delay_formula(Ndim)
+            k_source   = 'formula'
+         endif
+         delay_depth = k_resolved
+      else if (k_request == K_AUTO) then
          ! Once per run, then cached: this is a timing, and a second call could
          ! answer differently.
          if (k_resolved == 0) k_resolved = delay_probe(Ndim)
@@ -310,12 +327,17 @@ contains
       write (unit, '(a,i0,a,i0,a)') '   validated range        : [', &
         & K_FLOOR, ', ', K_CEILING, ']'
 
-      if (trim(k_source) == 'formula') &
+      ! Only when the probe was asked for and declined. Requesting the closed
+      ! form outright is a choice, not a fallback, and reporting it as one would
+      ! send the reader looking for a failure that did not happen.
+      if (trim(k_source) == 'formula' .and. k_request == K_AUTO) &
         & write (unit, '(a)') '   NB the probe was refused; this is the closed form'
 
       if (probe_cost(1) < 0.d0) return
 
-      write (unit, '(a,f6.3,a)') '   probe cost             : ', probe_seconds, ' s'
+      write (unit, '(a,f6.3,a,f8.1,a)') '   probe cost             : ', &
+        & probe_seconds, ' s, scratch ', &
+        & real(k_ndim, Kind(0.d0))*real(k_ndim, Kind(0.d0))*16.d0/1048576.d0, ' MB'
       write (unit, '(a)')        '        k   rel. cost   (1.00 = best)'
       ! Masked reduction over an empty set returns +huge, which would then divide
       ! every row into nonsense rather than obviously failing. Only reachable if
