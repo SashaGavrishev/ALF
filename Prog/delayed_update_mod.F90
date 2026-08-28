@@ -125,6 +125,22 @@ module delayed_update_mod
    ! is not what is being measured.
    Real (Kind=Kind(0.d0)), private, parameter :: PROBE_MIN_SECONDS = 5.d-3
    Integer,                private, parameter :: PROBE_MAX_REPS    = 4096
+
+   ! Whole ladder measured this many times, keeping the least of each candidate.
+   ! A packed node is the case this exists for and it is also the noisiest: a
+   ! neighbour's burst inflates whichever candidate happened to run under it, and
+   ! one sample cannot tell that from a real cost. Sweeping the ladder repeatedly
+   ! rather than repeating each candidate in place keeps a slow patch from
+   ! landing entirely on one rung.
+   Integer, private, parameter :: PROBE_SWEEPS = 3
+
+   ! Candidates within this of the best are not distinguishable from it, so the
+   ! choice between them is made by the curve's shape instead of by noise: the
+   ! basin is asymmetric -- undershooting k costs far more than overshooting it
+   ! -- so the largest such candidate wins. This also stabilises the answer,
+   ! since the band has to move a long way to change which rung is the largest
+   ! inside it, where an argmin flips on any jitter at all.
+   Real (Kind=Kind(0.d0)), private, parameter :: PROBE_MARGIN = 1.05d0
    Integer (Kind=8),       private, save      :: probe_c0 = 0
 
    ! Kept for delay_log: the curve the probe measured, what it cost to measure,
@@ -373,8 +389,8 @@ contains
       integer, intent(in) :: Ndim
       Complex (Kind=Kind(0.d0)), allocatable :: g(:,:), xs(:,:), ys(:,:)
       Complex (Kind=Kind(0.d0)), allocatable :: v(:), w(:)
-      Real (Kind=Kind(0.d0)) :: cost(N_CAND), tg, tv, lo, hi
-      integer :: i, k, c, kwide, stat
+      Real (Kind=Kind(0.d0)) :: cost(N_CAND), tg, tv, lo, hi, this
+      integer :: i, k, c, kwide, stat, sweep, best
       integer (Kind=8) :: wall0, wall1, wall_rate
 
       k_source = 'formula'
@@ -403,13 +419,19 @@ contains
       ! use that one, and a nested pair would leave this reading the last of
       ! them instead of the whole probe.
       call system_clock(wall0)
-      do i = 1, N_CAND
-         k = K_CAND(i)
-         if (k > kwide) cycle
-         c = max(1, k/2)
-         tg = time_flush(g, xs, ys, Ndim, k)
-         tv = time_panel(xs, v, w, Ndim, c)
-         cost(i) = tg/real(k, Kind(0.d0)) + 2.d0*tv
+      do sweep = 1, PROBE_SWEEPS
+         do i = 1, N_CAND
+            k = K_CAND(i)
+            if (k > kwide) cycle
+            c = max(1, k/2)
+            tg = time_flush(g, xs, ys, Ndim, k)
+            tv = time_panel(xs, v, w, Ndim, c)
+            this = tg/real(k, Kind(0.d0)) + 2.d0*tv
+            ! Least, not mean: contention only ever adds time, so the smallest
+            ! reading is the one least polluted by a neighbour, where a mean
+            ! would carry every burst it happened to see.
+            if (this < cost(i)) cost(i) = this
+         enddo
       enddo
       call system_clock(wall1, wall_rate)
       if (wall_rate > 0) probe_seconds = &
@@ -418,14 +440,23 @@ contains
 
       deallocate (g, xs, ys, v, w)
 
-      ! A curve flat to within a few percent across the whole ladder is noise,
-      ! not a minimum, and its argmin is a coin toss. The formula at least
-      ! answers the same way every time.
+      ! A curve flat across the *whole* ladder carries no information, so there is
+      ! nothing to pick from and the formula at least answers the same way every
+      ! time.
       lo = minval(cost)
       hi = maxval(cost, mask=(cost < huge(1.d0)))
-      if (lo <= 0.d0 .or. hi < 1.05d0*lo) return
+      if (lo <= 0.d0 .or. hi < PROBE_MARGIN*lo) return
 
-      delay_probe = min(K_CEILING, max(K_FLOOR, K_CAND(minloc(cost, 1))))
+      ! Not minloc. The ambiguity is between neighbouring rungs near the minimum,
+      ! which sit inside the run-to-run scatter; comparing the ends of the ladder
+      ! never sees it. Take the largest candidate within PROBE_MARGIN of the best.
+      best = K_CAND(1)
+      do i = 1, N_CAND
+         if (cost(i) >= huge(1.d0)) cycle
+         if (cost(i) <= PROBE_MARGIN*lo .and. K_CAND(i) > best) best = K_CAND(i)
+      enddo
+
+      delay_probe = min(K_CEILING, max(K_FLOOR, best))
       k_source = 'probe'
    end function delay_probe
 
@@ -433,9 +464,12 @@ contains
 !> @brief
 !> Entries of modulus ~1 with no dominant diagonal, for the probe's operands.
 !> @details
-!> Deterministic rather than random: the probe must not consume a random number,
-!> since it runs before Set_Random_number_Generator and the Monte Carlo stream
-!> has to be reproducible whether or not "auto" was used.
+!> Deterministic rather than random, and the requirement is stricter than it may
+!> look: the probe runs *after* Set_Random_number_Generator (main.F90 seeds the
+!> Monte Carlo stream, then calls Wrapgr_delay_alloc), so a draw taken here would
+!> not merely perturb the disorder -- it would shift the whole Markov chain, and
+!> by a different amount on every machine, since the number of draws would follow
+!> the timing. Nothing here may touch the generator.
 !--------------------------------------------------------------------
    subroutine probe_fill(a, m, n)
       implicit none
