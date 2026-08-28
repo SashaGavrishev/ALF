@@ -317,10 +317,23 @@ contains
 
       write (unit, '(a,f6.3,a)') '   probe cost             : ', probe_seconds, ' s'
       write (unit, '(a)')        '        k   rel. cost   (1.00 = best)'
+      ! Masked reduction over an empty set returns +huge, which would then divide
+      ! every row into nonsense rather than obviously failing. Only reachable if
+      ! system_clock reported no rate at all, but the table is a diagnostic and a
+      ! diagnostic that lies is worse than one that declines to answer.
+      if (.not. any(probe_cost > 0.d0)) then
+         write (unit, '(a)') '   (no timings: the clock reported no rate)'
+         return
+      endif
       lo = minval(probe_cost, mask=(probe_cost > 0.d0))
       do i = 1, N_CAND
-         if (probe_cost(i) <= 0.d0 .or. probe_cost(i) >= huge(1.d0)) then
+         ! Labelled from k against Ndim, which is the actual reason a candidate
+         ! was skipped -- not from its cost being unset, which is the same state
+         ! for several different causes.
+         if (K_CAND(i) > k_ndim) then
             write (unit, '(a,i5,a)') '   ', K_CAND(i), '        --   (above Ndim)'
+         else if (probe_cost(i) <= 0.d0 .or. probe_cost(i) >= huge(1.d0)) then
+            write (unit, '(a,i5,a)') '   ', K_CAND(i), '        --   (not timed)'
          else if (K_CAND(i) == kmax) then
             write (unit, '(a,i5,f12.3,a)') '   ', K_CAND(i), probe_cost(i)/lo, '   <- chosen'
          else
@@ -349,6 +362,12 @@ contains
       integer :: k
       k = nint(sqrt(2.d0*real(Ndim, Kind(0.d0))))
       delay_formula = min(K_CEILING, max(K_FLOOR, k))
+      ! Never wider than the matrix, which delay_probe refuses for its candidates
+      ! and the fallback had no reason to allow: past Ndim the update is not low
+      ! rank any more and the flush costs more than rebuilding G would. Only
+      ! reachable below Ndim = K_FLOOR, where it also means less accumulation
+      ! before a flush, so it cannot weaken the numerics the clamp protects.
+      delay_formula = min(delay_formula, max(1, Ndim))
    end function delay_formula
 
 !--------------------------------------------------------------------
@@ -775,18 +794,29 @@ contains
 !> O(d**2 * c), and paid on every proposal including the rejected ones -- this is
 !> the cost the delay adds, and the reason a very large k stops paying.
 !--------------------------------------------------------------------
-   subroutine delay_block(nf, GR, P, d, blk)
+   subroutine delay_block(nf, GR, P, d, blk, ldb)
+      use Control, only: Control_delay_split
       implicit none
       integer, intent(in) :: nf, d, P(d)
+      ! Leading dimension of blk, taken rather than assumed equal to d. The
+      ! caller's array is sized by the widest rank over calculated flavours,
+      ! while d is this flavour's, and the two differ as soon as a Hamiltonian
+      ! gives its flavours different vertex ranks. Declaring blk(d,d) then maps
+      ! the columns onto a stride the caller does not read back with, silently,
+      ! since sequence association raises no shape error.
+      integer, intent(in) :: ldb
       ! Explicit shape, not assumed shape. These are handed element-first to
       ! ZGEMM and ZCOPY, which have no explicit interface, and sequence
       ! association from an assumed-shape actual is not something the standard
       ! guarantees -- a compiler may pass a descriptor or a copy. upgrade_mod
       ! declares the same array the same way for the same reason.
       Complex (Kind=Kind(0.d0)), intent(in)  :: GR(ndim_s, ndim_s, nfl_s)
-      Complex (Kind=Kind(0.d0)), intent(out) :: blk(d,d)
-      real (Kind=Kind(0.d0)) :: worst
-      integer :: n, m, c
+      Complex (Kind=Kind(0.d0)), intent(out) :: blk(ldb,*)
+      real (Kind=Kind(0.d0)) :: worst, split
+      ! Only referenced under verify, which is a development mode; sized from the
+      ! live column count so an unverified run allocates nothing meaningful.
+      Complex (Kind=Kind(0.d0)) :: rowbuf(ndim_s), tmpc(max(ncol(nf),1))
+      integer :: n, m, c, i
       c = ncol(nf)
       do m = 1, d
          do n = 1, d
@@ -801,6 +831,33 @@ contains
          enddo
       endif
       if (verify) then
+         ! The same elements built the way delay_row builds them -- one ZGEMV
+         ! against the Y panel rather than the intrinsic sum above -- and the
+         ! largest disagreement booked separately from the shadow comparison.
+         !
+         ! It is not a check on either path being right; both are compared to
+         ! the shadow below and in delay_row. It measures how far they are from
+         ! *each other*, which the immediate scheme keeps at exactly zero by
+         ! taking both from one GR element. The acceptance determinant and the
+         ! Woodbury denominator cancel against each other, so a scheme can be
+         ! accurate against truth and still lose digits in that cancellation,
+         ! and nothing else here would see it.
+         if (c > 0) then
+            split = 0.d0
+            do n = 1, d
+               do i = 1, ndim_s
+                  rowbuf(i) = GR(P(n), i, nf)
+               enddo
+               tmpc(1:c) = xp(P(n), 1:c, nf)
+               call ZGEMV('N', ndim_s, c, cmplx(1.d0, 0.d0, Kind(0.d0)), &
+                    &     yp(1,1,nf), ndim_s, tmpc, 1, &
+                    &     cmplx(1.d0, 0.d0, Kind(0.d0)), rowbuf, 1)
+               do m = 1, d
+                  split = max(split, abs(blk(n,m) - rowbuf(P(m))))
+               enddo
+            enddo
+            call Control_delay_split(split/max(maxval(abs(gshadow(:,:,nf))), 1.d-300))
+         endif
          worst = 0.d0
          do m = 1, d
             do n = 1, d
@@ -870,7 +927,7 @@ contains
       Complex (Kind=Kind(0.d0)), intent(out) :: cols(ndim_s, d)
       Complex (Kind=Kind(0.d0)) :: one, tmp(max(ncol(nf),1))
       real (Kind=Kind(0.d0)) :: worst
-      integer :: l, c
+      integer :: i, l, c
       c   = ncol(nf)
       one = cmplx(1.d0, 0.d0, Kind(0.d0))
       do l = 1, d
@@ -883,8 +940,9 @@ contains
       if (verify) then
          worst = 0.d0
          do l = 1, d
-            do c = 1, ndim_s
-               worst = max(worst, abs(cols(c,l) - gshadow(c,P(l),nf)))
+            ! `i`, not `c`: c holds the live column count and is read above.
+            do i = 1, ndim_s
+               worst = max(worst, abs(cols(i,l) - gshadow(i,P(l),nf)))
             enddo
          enddo
          call verify_book(nf, worst)

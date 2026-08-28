@@ -117,6 +117,18 @@ module Control
     Real    (Kind=Kind(0.d0)), private, save :: Delay_err_mean, Delay_err_max
     Integer (Kind=Kind(0.d0)), private, save :: NC_delay_err
 
+    ! Disagreement between the two ways one Green's-function element is
+    ! reconstructed: the d x d block sums the panels directly, the row and column
+    ! accessors accumulate them through BLAS. The immediate scheme takes both
+    ! from the same GR element, which is what makes the acceptance determinant
+    ! and the Woodbury denominator cancel *exactly*; under the delay they only
+    ! cancel approximately, and this is the size of that gap. Booked separately
+    ! from Delay_err_max because they answer different questions -- that one is
+    ! reconstruction against truth, this one is reconstruction against itself,
+    ! and a scheme can be fine on the first while the solve amplifies the second.
+    Real    (Kind=Kind(0.d0)), private, save :: Delay_split_max
+    Integer (Kind=Kind(0.d0)), private, save :: NC_delay_split
+
     Integer (Kind=kind(0.d0)),  private, save :: NC_Glob_up, ACC_Glob_up
     Integer (Kind=kind(0.d0)),  private, save :: NC_HMC_up, ACC_HMC_up
     Integer (Kind=kind(0.d0)),  private, save :: NC_Temp_up, ACC_Temp_up
@@ -186,6 +198,8 @@ module Control
         Delay_err_mean  = 0.d0
         Delay_err_max   = 0.d0
         NC_delay_err    = 0
+        NC_delay_split  = 0
+        Delay_split_max = 0.d0
 
         size_clust_Glob_up    = 0.d0
         size_clust_Glob_ACC_up= 0.d0
@@ -317,6 +331,20 @@ module Control
         Delay_err_mean = Delay_err_mean + discrepancy
         if (discrepancy > Delay_err_max) Delay_err_max = discrepancy
       end Subroutine Control_delay_verify
+
+!--------------------------------------------------------------------
+!> @brief
+!> Book one block-against-accessor reconstruction disagreement.
+!> @details
+!> See Delay_split_max. Relative, so it is comparable across sizes and depths,
+!> which is the point -- the question is whether it grows with k.
+!--------------------------------------------------------------------
+      Subroutine Control_delay_split(discrepancy)
+        Implicit none
+        Real (Kind=Kind(0.d0)), Intent(In) :: discrepancy
+        NC_delay_split = NC_delay_split + 1
+        if (discrepancy > Delay_split_max) Delay_split_max = discrepancy
+      end Subroutine Control_delay_split
 
 !--------------------------------------------------------------------
 !> @brief
@@ -708,6 +736,9 @@ module Control
               Write(50,*) ' Delay reconstruction Mean, Max : ', &
                    &      Delay_err_mean/dble(NC_delay_err), Delay_err_max
               Write(50,*) ' Delay slices checked       : ', NC_delay_err
+           Endif
+           If ( NC_delay_split > 0 ) then
+              Write(50,*) ' Delay block-accessor split : ', Delay_split_max
            Endif
 #if defined(TEMPERING)
            Write(50,*) ' Acceptance Tempering       : ', ACC_Temp

@@ -234,7 +234,7 @@ module upgrade_mod
               ! Same arithmetic against the current Green's function, which under
               ! the delay is the stale matrix plus the panels. O(d**2*k), and paid
               ! on rejected proposals too -- the cost the delay adds.
-              call delay_block(nf, GR, Op_V(n_op,nf)%P, op_dim_nf, Gblk)
+              call delay_block(nf, GR, Op_V(n_op,nf)%P, op_dim_nf, Gblk, Op_dim)
               Do m = 1,op_dim_nf
                  myexp = exp( Z1* Op_V(n_op,nf)%E(m) )
                  Z = myexp - 1.d0

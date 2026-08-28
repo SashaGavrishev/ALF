@@ -70,7 +70,7 @@ Program DelayedPanels
    ! flush itself, and a partial panel again afterwards.
    Do step = 0, 5
 
-      Call delay_block(1, GR, P, d, blk)
+      Call delay_block(1, GR, P, d, blk, d)
       Call delay_row  (1, GR, P, d, rows)
       Call delay_col  (1, GR, P, d, cols)
 
