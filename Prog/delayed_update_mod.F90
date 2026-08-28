@@ -78,8 +78,9 @@ module delayed_update_mod
    public :: delay_wrap, delay_pending, delay_verify_on
 
    ! Panels and their live column count, one set per flavour. Allocated once
-   ! beside Wrapgr_alloc rather than per slice: at Ndim = 2048, k = 32, dmax = 2
-   ! and N_FL = 2 this is ~4.5 MB against 67 MB for one Green's function.
+   ! beside Wrapgr_alloc rather than per slice: they are Ndim*(k+dmax) per
+   ! flavour against Ndim**2 for one Green's function, so even at the depth
+   ! ceiling they stay a fraction of what the matrix they correct costs.
    Complex (Kind=Kind(0.d0)), private, save, allocatable :: xp(:,:,:), yp(:,:,:)
    Integer,                   private, save, allocatable :: ncol(:)
 
@@ -94,6 +95,12 @@ module delayed_update_mod
    Integer, private, save :: k_request = -2
    Integer, private, parameter :: K_AUTO = -1
    Integer, private, parameter :: K_UNREAD = -2
+
+   ! Bounds on the depth "auto" may resolve to. The ceiling is the deepest k
+   ! delay_consistency holds to trajectory identity, so it moves only after that
+   ! ladder does; see delay_depth.
+   Integer, private, parameter :: K_FLOOR   = 8
+   Integer, private, parameter :: K_CEILING = 256
 
    ! ALF_DELAY_VERIFY: carry a second Green's function through the slice, updated
    ! immediately, and compare the two when the region closes.
@@ -136,16 +143,25 @@ contains
 !> the pre-existing path and reproduces earlier results byte for byte. A positive
 !> integer fixes the depth. "auto" resolves to sqrt(2*Ndim), where the panel cost
 !> k and the amortised flush 2*Ndim/k cross: 12 at Ndim = 72, 20 at 200, 48 at
-!> 1152 and 64 at 2048. Bandwidth multiplies both of those terms and so cancels
-!> between them, which is why the optimum depends on Ndim alone and not on how
-!> the node is packed.
+!> 1152 and 64 at 2048.
 !>
-!> The clamp [8, 64] guards against an absurd k; it is not a priced bound. What
-!> would set the ceiling properly is the achieved level-3/level-2 rate ratio at
-!> the production point, which puts the flush's compute-bound knee near R/4 --
-!> unmeasured, and the reason the previous ceiling of 32 was worth replacing: it
-!> was reached at both Ndim = 1152 and 2048, so auto returned the ceiling itself
-!> rather than a square root at exactly the sizes this exists for.
+!> That coefficient is the open question, and a stronger claim than the ceiling
+!> below. It assumes bandwidth multiplies both terms and so cancels between them,
+!> leaving an optimum in Ndim alone -- but the panels are Ndim*k and stay
+!> cache-resident where the Green's function does not, so the two run at
+!> different bandwidths and the measured minimum sits above the square root. How
+!> far above depends on the library's small-k ZGEMM and on how the node is
+!> packed, so it has to be measured where the campaign runs. (The ceiling was
+!> once argued from a compute-bound knee in the flush at a multiple of the
+!> level-3/level-2 rate ratio. There is no such knee: the flush's rate is still
+!> climbing across every k worth using.)
+!>
+!> The clamp [8, 256] is a validated bound, not a guard. delay_consistency holds
+!> every depth to 256 to trajectory identity with the Green's function flat in k,
+!> and nothing may be selected past what that ladder covers; raising it further
+!> means extending the ladder first. The ceiling only begins to bind past
+!> Ndim = 2048, so by itself it changes no run on the current grid -- the
+!> coefficient above is what would.
 !>
 !> Not a simulation parameter, deliberately: it would enter the parameter hash and
 !> so repoint sim_dir away from existing data, for a knob that changes no physics.
@@ -173,11 +189,11 @@ contains
       endif
 
       if (k_request == K_AUTO) then
-         ! nint(sqrt(2*Ndim)), clamped to [8, 64]. Deliberately not rounded to a
+         ! nint(sqrt(2*Ndim)), clamped to [8, 256]. Deliberately not rounded to a
          ! power of two: k is a flush threshold, not a blocking factor, and no
          ! BLAS call here wants a particular inner dimension.
          k = nint(sqrt(2.d0*real(Ndim, Kind(0.d0))))
-         delay_depth = min(64, max(8, k))
+         delay_depth = min(K_CEILING, max(K_FLOOR, k))
       else
          delay_depth = k_request
       endif
