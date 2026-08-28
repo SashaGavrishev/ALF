@@ -427,7 +427,19 @@ Program Main
         ! sequential vertex loop, which runs on every slice whether or not
         ! global-in-tau moves are enabled. No-op when the delay is off.
         Call Wrapgr_delay_alloc
-        
+#ifndef ALF_NO_DELAY
+        ! Rank-guarded here rather than inside the module, which is deliberately
+        ! free of MPI and so cannot decide for itself whether to print. One line
+        ! when the delay is off, the probe's curve when it ran.
+#ifdef MPI
+        If ( Irank == 0 ) then
+#endif
+           Call delay_log(6)
+#ifdef MPI
+        endif
+#endif
+#endif
+
 #if defined(HDF5)
 #if defined(TEMPERING)
         write(file_dat,'(A,I0,A)') "Temp_",igroup,"/data.h5"

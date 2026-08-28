@@ -100,6 +100,14 @@ module Control
     ! that changes the arithmetic must leave a trace in the run record.
     Integer, private, save :: Delay_depth_used = 0
 
+    ! How that depth was arrived at: fixed by ALF_DELAY_K, measured by the probe
+    ! "auto" runs, or the closed form the probe falls back to. Reported on its own
+    ! line rather than folded into the depth, both because update_share.py parses
+    ! that one and because the fallback is the failure worth seeing -- a probe
+    ! that quietly fell back on every chain is a probe that is not running, and a
+    ! depth alone cannot show it.
+    Character (Len=16), private, save :: Delay_depth_from = 'off'
+
     ! Per-slice discrepancy between the factored Green's function and a shadow
     ! carried by the immediate scheme, under ALF_DELAY_VERIFY. This is the direct
     ! measurement of how far the reconstruction drifts -- the risk the cost model
@@ -287,10 +295,12 @@ module Control
 !> Control_init: the depth is a property of the build and environment, and
 !> Control_init runs again just before the bin loop.
 !--------------------------------------------------------------------
-      Subroutine Control_set_delay_depth(k)
+      Subroutine Control_set_delay_depth(k, source)
         Implicit none
         Integer, Intent(In) :: k
+        Character (Len=*), Intent(In), Optional :: source
         Delay_depth_used = k
+        if (Present(source)) Delay_depth_from = source
       end Subroutine Control_set_delay_depth
 
 !--------------------------------------------------------------------
@@ -686,6 +696,7 @@ module Control
            ! second one distinguishes an old binary from a new one running
            ! immediate updates.
            Write(50,*) ' Delay depth                : ', Delay_depth_used
+           Write(50,*) ' Delay depth from           : ', Trim(Delay_depth_from)
 #ifndef ALF_NO_DELAY
            Write(50,*) ' Metropolis near ties       : ', NC_near_tie
 #endif

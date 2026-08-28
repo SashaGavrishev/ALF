@@ -75,7 +75,8 @@ module delayed_update_mod
    public :: delay_alloc, delay_dealloc, delay_depth, delay_active
    public :: delay_assert_inactive, delay_open, delay_close
    public :: delay_block, delay_row, delay_col, delay_append, delay_flush
-   public :: delay_wrap, delay_pending, delay_verify_on
+   public :: delay_wrap, delay_pending, delay_verify_on, delay_source_name
+   public :: delay_log
 
    ! Panels and their live column count, one set per flavour. Allocated once
    ! beside Wrapgr_alloc rather than per slice: they are Ndim*(k+dmax) per
@@ -101,6 +102,39 @@ module delayed_update_mod
    ! ladder does; see delay_depth.
    Integer, private, parameter :: K_FLOOR   = 8
    Integer, private, parameter :: K_CEILING = 256
+
+   ! The resolved "auto" depth, cached because delay_depth is called more than
+   ! once per run -- delay_alloc sets kmax from it and Wrapgr_delay_alloc reports
+   ! it -- and the probe below is a timing, so a second call could answer
+   ! differently and make Control report a depth kmax was never set from.
+   Integer, private, save :: k_resolved = 0
+
+   ! How that depth was arrived at, for the info file. A probe that quietly fell
+   ! back to the formula on every chain is a probe that is not running, and
+   ! reporting only the number would not show it.
+   Character (Len=16), private, save :: k_source = 'off'
+
+   ! Depths the probe times. Coarse deliberately: the cost curve is flat near its
+   ! minimum, so neighbouring rungs differ by less than the run-to-run scatter on
+   ! a shared node, and a fine ladder would cost more while resolving nothing.
+   ! Confined to the validated range, since nothing outside it may be selected.
+   Integer, private, parameter :: N_CAND = 6
+   Integer, private, parameter :: K_CAND(N_CAND) = [8, 16, 32, 64, 128, 256]
+
+   ! Each timed call is repeated until it clears this, so the clock's resolution
+   ! is not what is being measured.
+   Real (Kind=Kind(0.d0)), private, parameter :: PROBE_MIN_SECONDS = 5.d-3
+   Integer,                private, parameter :: PROBE_MAX_REPS    = 4096
+   Integer (Kind=8),       private, save      :: probe_c0 = 0
+
+   ! Kept for delay_log: the curve the probe measured, what it cost to measure,
+   ! and the request it was resolving. A depth on its own says what was chosen
+   ! and not whether the choice was real -- a flat curve and a sharp minimum
+   ! print the same number.
+   Real (Kind=Kind(0.d0)), private, save :: probe_cost(N_CAND) = -1.d0
+   Real (Kind=Kind(0.d0)), private, save :: probe_seconds = 0.d0
+   Character (Len=32),     private, save :: k_request_text = '<unset>'
+   Integer,                private, save :: k_ndim = 0
 
    ! ALF_DELAY_VERIFY: carry a second Green's function through the slice, updated
    ! immediately, and compare the two when the region closes.
@@ -141,27 +175,35 @@ contains
 !> ALF_DELAY_K, read once and cached, following ALF_UPDATE_SAMPLE in
 !> upgrade_mod. Unset or "0" disables it -- the default, so a stock build takes
 !> the pre-existing path and reproduces earlier results byte for byte. A positive
-!> integer fixes the depth. "auto" resolves to sqrt(2*Ndim), where the panel cost
-!> k and the amortised flush 2*Ndim/k cross: 12 at Ndim = 72, 20 at 200, 48 at
-!> 1152 and 64 at 2048.
+!> integer fixes the depth, and is used verbatim -- never clamped, which is what
+!> lets the validation harnesses drive depths past the ceiling.
 !>
-!> That coefficient is the open question, and a stronger claim than the ceiling
-!> below. It assumes bandwidth multiplies both terms and so cancels between them,
-!> leaving an optimum in Ndim alone -- but the panels are Ndim*k and stay
-!> cache-resident where the Green's function does not, so the two run at
-!> different bandwidths and the measured minimum sits above the square root. How
-!> far above depends on the library's small-k ZGEMM and on how the node is
-!> packed, so it has to be measured where the campaign runs. (The ceiling was
-!> once argued from a compute-bound knee in the flush at a multiple of the
-!> level-3/level-2 rate ratio. There is no such knee: the flush's rate is still
-!> climbing across every k worth using.)
+!> "auto" *measures* the depth: delay_probe times the two k-dependent costs at
+!> this Ndim and takes the argmin, falling back to delay_formula's closed form
+!> when the measurement cannot be trusted. It is resolved once and cached in
+!> k_resolved, because this function is called more than once per run -- delay_alloc
+!> sets kmax from it and Wrapgr_delay_alloc reports it -- and a timing asked
+!> twice can answer twice.
 !>
-!> The clamp [8, 256] is a validated bound, not a guard. delay_consistency holds
+!> Measuring rather than deriving is the point. The closed form assumes bandwidth
+!> multiplies the panel term and the amortised flush alike and so cancels between
+!> them, leaving an optimum in Ndim alone; it does not cancel, because the panels
+!> are Ndim*k and stay cache-resident where the Green's function does not. How
+!> far apart the two run is a property of the machine and of the library's
+!> small-k ZGEMM, which is exactly what a formula cannot carry from one cluster
+!> to another. (The ceiling was once argued instead from a compute-bound knee in
+!> the flush at a multiple of the level-3/level-2 rate ratio. There is no such
+!> knee: the flush's rate is still climbing across every k worth using.)
+!>
+!> A depth chosen by measurement varies between runs of one chain, which is only
+!> safe because the delayed path consumes no random number the immediate one does
+!> not and so replays the same Markov chain at any k -- verified bitwise on
+!> confout across the whole ladder. Without that this would not be defensible.
+!>
+!> The clamp [8, 256] is a validated bound, not a guard: delay_consistency holds
 !> every depth to 256 to trajectory identity with the Green's function flat in k,
-!> and nothing may be selected past what that ladder covers; raising it further
-!> means extending the ladder first. The ceiling only begins to bind past
-!> Ndim = 2048, so by itself it changes no run on the current grid -- the
-!> coefficient above is what would.
+!> and nothing may be selected past what that ladder covers. Raising it means
+!> extending the ladder first.
 !>
 !> Not a simulation parameter, deliberately: it would enter the parameter hash and
 !> so repoint sim_dir away from existing data, for a knob that changes no physics.
@@ -178,26 +220,319 @@ contains
          k_request = 0
          call get_environment_variable("ALF_DELAY_K", text, length, status)
          if (status == 0 .and. length > 0) then
+            k_request_text = trim(adjustl(text(1:length)))
             if (trim(adjustl(text(1:length))) == "auto" .or. &
               & trim(adjustl(text(1:length))) == "AUTO") then
                k_request = K_AUTO
             else
                read (text(1:length), *, iostat=status) value
-               if (status == 0 .and. value >= 0) k_request = value
+               if (status == 0 .and. value >= 0) then
+                  k_request = value
+               else
+                  ! Unreadable, so the delay stays off -- and that is worth
+                  ! saying, since a typo would otherwise silently cost the run
+                  ! everything the delay was enabled for.
+                  k_request_text = trim(k_request_text)//' (unreadable)'
+               endif
             endif
          endif
       endif
 
+      k_ndim = Ndim
       if (k_request == K_AUTO) then
-         ! nint(sqrt(2*Ndim)), clamped to [8, 256]. Deliberately not rounded to a
-         ! power of two: k is a flush threshold, not a blocking factor, and no
-         ! BLAS call here wants a particular inner dimension.
-         k = nint(sqrt(2.d0*real(Ndim, Kind(0.d0))))
-         delay_depth = min(K_CEILING, max(K_FLOOR, k))
+         ! Once per run, then cached: this is a timing, and a second call could
+         ! answer differently.
+         if (k_resolved == 0) k_resolved = delay_probe(Ndim)
+         delay_depth = k_resolved
       else
          delay_depth = k_request
+         if (k_request > 0) k_source = 'fixed'
       endif
    end function delay_depth
+
+!--------------------------------------------------------------------
+!> @brief
+!> How the depth in force was arrived at: off, fixed, probe or formula.
+!--------------------------------------------------------------------
+   function delay_source_name() result(name)
+      implicit none
+      Character (Len=16) :: name
+      name = k_source
+   end function delay_source_name
+
+!--------------------------------------------------------------------
+!> @brief
+!> Say what the delay is set to and how that was decided.
+!> @details
+!> Called once at setup, from main under the rank guard -- this module is
+!> deliberately free of MPI, so it cannot decide for itself whether to print and
+!> does not try.
+!>
+!> The probe's whole curve is printed, not only its argmin, because the argmin
+!> alone cannot be judged: a flat curve and a sharp minimum report the same
+!> depth, and only the first means the choice did not matter. Printing it also
+!> makes the fallback legible -- a run that says "formula" is a run where the
+!> measurement was refused, which is a thing to notice rather than to infer from
+!> a depth that happens to equal sqrt(2*Ndim).
+!--------------------------------------------------------------------
+   subroutine delay_log(unit)
+      implicit none
+      integer, intent(in) :: unit
+      integer :: i
+      Real (Kind=Kind(0.d0)) :: lo
+
+      write (unit, '(a)') ' Delayed update:'
+      write (unit, '(a,a)')      '   ALF_DELAY_K            : ', trim(k_request_text)
+      if (kmax <= 0) then
+         write (unit, '(a)')     '   status                 : off (immediate updates)'
+         return
+      endif
+      write (unit, '(a,i0)')     '   Ndim                   : ', k_ndim
+      write (unit, '(a,i0)')     '   depth k                : ', kmax
+      write (unit, '(a,a)')      '   chosen by              : ', trim(k_source)
+      write (unit, '(a,i0)')     '   panel width (k + dmax) : ', panel_w
+      write (unit, '(a,i0,a,i0,a)') '   validated range        : [', &
+        & K_FLOOR, ', ', K_CEILING, ']'
+
+      if (trim(k_source) == 'formula') &
+        & write (unit, '(a)') '   NB the probe was refused; this is the closed form'
+
+      if (probe_cost(1) < 0.d0) return
+
+      write (unit, '(a,f6.3,a)') '   probe cost             : ', probe_seconds, ' s'
+      write (unit, '(a)')        '        k   rel. cost   (1.00 = best)'
+      lo = minval(probe_cost, mask=(probe_cost > 0.d0))
+      do i = 1, N_CAND
+         if (probe_cost(i) <= 0.d0 .or. probe_cost(i) >= huge(1.d0)) then
+            write (unit, '(a,i5,a)') '   ', K_CAND(i), '        --   (above Ndim)'
+         else if (K_CAND(i) == kmax) then
+            write (unit, '(a,i5,f12.3,a)') '   ', K_CAND(i), probe_cost(i)/lo, '   <- chosen'
+         else
+            write (unit, '(a,i5,f12.3)')   '   ', K_CAND(i), probe_cost(i)/lo
+         endif
+      enddo
+   end subroutine delay_log
+
+!--------------------------------------------------------------------
+!> @brief
+!> The closed-form depth: nint(sqrt(2*Ndim)), clamped.
+!> @details
+!> Where the panel cost k and the amortised flush 2*Ndim/k cross under a model
+!> in which bandwidth multiplies both and so cancels. It does not cancel -- the
+!> panels are Ndim*k and stay cache-resident where the Green's function does not
+!> -- which is why this is the fallback and delay_probe is what "auto" runs.
+!> Kept as the fallback rather than deleted: it needs no measurement and so
+!> cannot fail, which is exactly what a fallback has to offer.
+!>
+!> Deliberately not rounded to a power of two: k is a flush threshold, not a
+!> blocking factor, and no BLAS call here wants a particular inner dimension.
+!--------------------------------------------------------------------
+   integer function delay_formula(Ndim)
+      implicit none
+      integer, intent(in) :: Ndim
+      integer :: k
+      k = nint(sqrt(2.d0*real(Ndim, Kind(0.d0))))
+      delay_formula = min(K_CEILING, max(K_FLOOR, k))
+   end function delay_formula
+
+!--------------------------------------------------------------------
+!> @brief
+!> Pick the depth by timing the two k-dependent costs at this Ndim.
+!> @details
+!> Per accepted flip the delayed scheme pays a flush ZGEMM('N','T',Ndim,Ndim,k)
+!> once every k/d flips, and 2*d panel ZGEMVs against a panel that is half full
+!> on average:
+!>
+!>     cost(k) = t_gemm(k)*d/k + 2*d*t_gemv(k/2)
+!>             = d * [ t_gemm(k)/k + 2*t_gemv(k/2) ]
+!>
+!> **d factors out, so the argmin does not depend on the operator rank** -- nor
+!> on the acceptance rate, which scales every accepted-flip cost alike. That is
+!> what makes this cheap: no ZGERU baseline is needed either, since a speedup is
+!> not being computed, only a minimum located. The O(d**2*k) ratio correction is
+!> left out; it is a per-proposal cost of order one percent here and including it
+!> would need the acceptance rate the probe deliberately avoids.
+!>
+!> Why measure at all: the closed form assumes the two terms share a bandwidth
+!> and it cancels between them. The panels are Ndim*k and stay cache-resident
+!> where the Green's function does not, so they run at different bandwidths, by a
+!> ratio that is a property of the machine and of the library's small-k ZGEMM.
+!> That is not something a formula can carry across a cluster.
+!>
+!> Cost is tens of milliseconds against a segment of hours. The scratch matrix is
+!> the real price: one Ndim**2 array, transiently, on top of what ALF already
+!> holds, and every rank of a packed node reaches this at the same moment.
+!>
+!> Falls back to delay_formula whenever the measurement cannot be trusted --
+!> allocation refused, or a curve whose spread is small enough to be noise. The
+!> source is recorded either way, because a probe silently falling back on every
+!> chain is a probe that is not running.
+!--------------------------------------------------------------------
+   integer function delay_probe(Ndim)
+      implicit none
+      integer, intent(in) :: Ndim
+      Complex (Kind=Kind(0.d0)), allocatable :: g(:,:), xs(:,:), ys(:,:)
+      Complex (Kind=Kind(0.d0)), allocatable :: v(:), w(:)
+      Real (Kind=Kind(0.d0)) :: cost(N_CAND), tg, tv, lo, hi
+      integer :: i, k, c, kwide, stat
+      integer (Kind=8) :: wall0, wall1, wall_rate
+
+      k_source = 'formula'
+      delay_probe = delay_formula(Ndim)
+
+      ! No candidate may exceed Ndim: past that the update is no longer low rank
+      ! and the flush costs more than rebuilding the matrix would.
+      kwide = 0
+      do i = 1, N_CAND
+         if (K_CAND(i) <= Ndim) kwide = K_CAND(i)
+      enddo
+      if (kwide < K_FLOOR) return
+
+      allocate (g(Ndim,Ndim), xs(Ndim,kwide), ys(Ndim,kwide), &
+              & v(kwide), w(Ndim), stat=stat)
+      if (stat /= 0) return
+
+      call probe_fill(g, Ndim, Ndim)
+      call probe_fill(xs, Ndim, kwide)
+      call probe_fill(ys, Ndim, kwide)
+      call probe_fill_vec(v, kwide)
+      call probe_fill_vec(w, Ndim)
+
+      cost = huge(1.d0)
+      ! Its own clock, not probe_clock_start: the per-candidate timings below
+      ! use that one, and a nested pair would leave this reading the last of
+      ! them instead of the whole probe.
+      call system_clock(wall0)
+      do i = 1, N_CAND
+         k = K_CAND(i)
+         if (k > kwide) cycle
+         c = max(1, k/2)
+         tg = time_flush(g, xs, ys, Ndim, k)
+         tv = time_panel(xs, v, w, Ndim, c)
+         cost(i) = tg/real(k, Kind(0.d0)) + 2.d0*tv
+      enddo
+      call system_clock(wall1, wall_rate)
+      if (wall_rate > 0) probe_seconds = &
+        & real(wall1 - wall0, Kind(0.d0))/real(wall_rate, Kind(0.d0))
+      probe_cost = cost
+
+      deallocate (g, xs, ys, v, w)
+
+      ! A curve flat to within a few percent across the whole ladder is noise,
+      ! not a minimum, and its argmin is a coin toss. The formula at least
+      ! answers the same way every time.
+      lo = minval(cost)
+      hi = maxval(cost, mask=(cost < huge(1.d0)))
+      if (lo <= 0.d0 .or. hi < 1.05d0*lo) return
+
+      delay_probe = min(K_CEILING, max(K_FLOOR, K_CAND(minloc(cost, 1))))
+      k_source = 'probe'
+   end function delay_probe
+
+!--------------------------------------------------------------------
+!> @brief
+!> Entries of modulus ~1 with no dominant diagonal, for the probe's operands.
+!> @details
+!> Deterministic rather than random: the probe must not consume a random number,
+!> since it runs before Set_Random_number_Generator and the Monte Carlo stream
+!> has to be reproducible whether or not "auto" was used.
+!--------------------------------------------------------------------
+   subroutine probe_fill(a, m, n)
+      implicit none
+      integer, intent(in) :: m, n
+      Complex (Kind=Kind(0.d0)), intent(out) :: a(m,n)
+      integer :: i, j
+      do j = 1, n
+         do i = 1, m
+            a(i,j) = cmplx(sin(real(i + 2*j, Kind(0.d0))), &
+                         & cos(real(3*i - j, Kind(0.d0))), Kind(0.d0))
+         enddo
+      enddo
+   end subroutine probe_fill
+
+   subroutine probe_fill_vec(a, n)
+      implicit none
+      integer, intent(in) :: n
+      Complex (Kind=Kind(0.d0)), intent(out) :: a(n)
+      integer :: i
+      do i = 1, n
+         a(i) = cmplx(sin(real(i, Kind(0.d0))), cos(real(2*i, Kind(0.d0))), Kind(0.d0))
+      enddo
+   end subroutine probe_fill_vec
+
+!--------------------------------------------------------------------
+!> @brief
+!> Seconds for one flush, ZGEMM('N','T',Ndim,Ndim,k), repeated to clear the clock.
+!> @details
+!> alpha is tiny so that thousands of accumulated updates cannot drift g towards
+!> overflow or into denormals: this measures traffic, and arithmetic that changed
+!> character partway through would not be the traffic ALF pays. Non-zero because
+!> a BLAS may return immediately on alpha == 0.
+!--------------------------------------------------------------------
+   real (Kind=Kind(0.d0)) function time_flush(g, xs, ys, Ndim, k)
+      implicit none
+      integer, intent(in) :: Ndim, k
+      Complex (Kind=Kind(0.d0)), intent(inout) :: g(Ndim,Ndim)
+      Complex (Kind=Kind(0.d0)), intent(in)    :: xs(Ndim,*), ys(Ndim,*)
+      Complex (Kind=Kind(0.d0)) :: alpha, one
+      integer :: rep, reps
+      alpha = cmplx(1.d-8, 0.d0, Kind(0.d0))
+      one   = cmplx(1.d0, 0.d0, Kind(0.d0))
+      reps = 1
+      do
+         call probe_clock_start()
+         do rep = 1, reps
+            call ZGEMM('N', 'T', Ndim, Ndim, k, alpha, xs, Ndim, ys, Ndim, one, g, Ndim)
+         enddo
+         time_flush = probe_clock_stop()
+         if (time_flush >= PROBE_MIN_SECONDS .or. reps >= PROBE_MAX_REPS) exit
+         reps = reps*4
+      enddo
+      time_flush = time_flush/real(reps, Kind(0.d0))
+   end function time_flush
+
+!--------------------------------------------------------------------
+!> @brief
+!> Seconds for one panel ZGEMV against c live columns.
+!--------------------------------------------------------------------
+   real (Kind=Kind(0.d0)) function time_panel(xs, v, w, Ndim, c)
+      implicit none
+      integer, intent(in) :: Ndim, c
+      Complex (Kind=Kind(0.d0)), intent(in)    :: xs(Ndim,*)
+      Complex (Kind=Kind(0.d0)), intent(in)    :: v(*)
+      Complex (Kind=Kind(0.d0)), intent(inout) :: w(Ndim)
+      Complex (Kind=Kind(0.d0)) :: alpha, one
+      integer :: rep, reps
+      alpha = cmplx(1.d-8, 0.d0, Kind(0.d0))
+      one   = cmplx(1.d0, 0.d0, Kind(0.d0))
+      reps = 1
+      do
+         call probe_clock_start()
+         do rep = 1, reps
+            call ZGEMV('N', Ndim, c, alpha, xs, Ndim, v, 1, one, w, 1)
+         enddo
+         time_panel = probe_clock_stop()
+         if (time_panel >= PROBE_MIN_SECONDS .or. reps >= PROBE_MAX_REPS) exit
+         reps = reps*4
+      enddo
+      time_panel = time_panel/real(reps, Kind(0.d0))
+   end function time_panel
+
+   subroutine probe_clock_start()
+      implicit none
+      call system_clock(probe_c0)
+   end subroutine probe_clock_start
+
+   real (Kind=Kind(0.d0)) function probe_clock_stop()
+      implicit none
+      integer (Kind=8) :: c1, rate
+      call system_clock(c1, rate)
+      if (rate <= 0) then
+         probe_clock_stop = 0.d0
+      else
+         probe_clock_stop = real(c1 - probe_c0, Kind(0.d0))/real(rate, Kind(0.d0))
+      endif
+   end function probe_clock_stop
 
 !--------------------------------------------------------------------
 !> @brief

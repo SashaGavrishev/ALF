@@ -97,7 +97,7 @@ Contains
   Subroutine Wrapgr_delay_alloc
     Implicit none
 #ifdef ALF_NO_DELAY
-    call Control_set_delay_depth(-1)
+    call Control_set_delay_depth(-1, 'compiled-out')
 #else
     Integer :: n, nf, dmax
     ! Widest wrap support in the model. Op%N, not Op%N_non_zero: the conjugation
@@ -109,7 +109,9 @@ Contains
        enddo
     enddo
     call delay_alloc(Ndim, N_FL, dmax)
-    call Control_set_delay_depth(delay_depth(Ndim))
+    ! delay_alloc has already resolved the depth, so this call is the cached
+    ! value -- it does not re-run the probe.
+    call Control_set_delay_depth(delay_depth(Ndim), delay_source_name())
 #endif
   end Subroutine Wrapgr_delay_alloc
 
