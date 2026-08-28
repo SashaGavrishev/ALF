@@ -31,13 +31,14 @@ add_executable(26-Test-Polymorphic-Fortran 26-Test-Polymorphic-Fortran.F90)
 add_executable(27-Op-mmultL-m1.F90 27-Op-mmultL-m1.F90)
 add_executable(28-delayed-panels 28-delayed-panels.F90)
 add_executable(29-delayed-wrap 29-delayed-wrap.F90)
+add_executable(30-delayed-update 30-delayed-update.F90)
 # set(operatorparts 1-copy-sel-rows 2-copy-sel-columns 3-opmult 4-opmultct 5-FillExpOps 6-opexpmult-1 6-opexpmult-2 7-opexpmultct-1 7-opexpmultct-2 9-Op-Phase 10-Op-mmultL 11-Op-mmultR 13-Op-Wrapup 14-Op-Wrapdo 21-Op-make 22-sl-mat-mults)
 set(operatorparts 9-Op-Phase 10-Op-mmultL 11-Op-mmultR 13-Op-Wrapup 14-Op-Wrapdo 21-Op-make 22-sl-mat-mults 26-Test-Polymorphic-Fortran 27-Op-mmultL-m1.F90 29-delayed-wrap)
 set(cgr2_2tests 16-get-blocks 17-solve-extended-system)
 #set(cgr2_1tests 8-scalematrix-1 8-scalematrix-2)
 set(cgr1tests 15-cgr 20-qdrp 23-cgrp)
 set(udvstatetests 18-ul-update-matrices 19-ur-update-matrices 24-udv 25-assign-UDV-state)
-set(delayedtests 28-delayed-panels)
+set(delayedtests 28-delayed-panels 30-delayed-update)
 set(progtests ${operatorparts} ${delayedtests} ${cgr1tests} ${cgr2_1tests} ${cgr2_2tests} ${udvstatetests})
 
 
@@ -133,3 +134,8 @@ add_test(28-delayed-panels 28-delayed-panels)
 # delay_alloc is a no-op without this, and every assertion in the test would then
 # pass vacuously; the test checks the depth on entry and refuses if it is unset.
 set_tests_properties(28-delayed-panels PROPERTIES ENVIRONMENT "ALF_DELAY_K=8")
+
+add_test(30-delayed-update 30-delayed-update)
+# Same reason as 28, and the same depth: the test's step count is chosen against
+# k = 8 so that every rank both flushes and ends holding a partial panel.
+set_tests_properties(30-delayed-update PROPERTIES ENVIRONMENT "ALF_DELAY_K=8")
