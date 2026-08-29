@@ -52,6 +52,82 @@ This default updating scheme can be overruled by, e.g., setting \texttt{Global\_
 It is also worth noting that this type of sequential spin-flip updating does not satisfy detailed balance, but rather the more fundamental stationarity condition \cite{Sokal89}. 
 
 
+%
+%------------------------------------------------------------
+\subsubsection{Delayed (rank-$k$) updates}
+\label{sec:delayed}
+%------------------------------------------------------------
+%
+Each accepted single spin flip applies a rank-$d$ correction to the whole Green's
+function, where $d$ is the rank of the vertex. That correction is a level-2
+BLAS operation: it streams $N_{\text{dim}}^2$ complex entries to carry out
+$\mathcal{O}(d \, N_{\text{dim}}^2)$ floating-point operations, so at the lattice
+sizes where a simulation is expensive it is bound by memory bandwidth rather
+than by arithmetic.
+
+The proposal that follows does not, however, need the updated Green's function
+in full.  It needs the $d \times d$ block $G(P,P)$ to form the acceptance ratio,
+and, on acceptance, $d$ rows and $d$ columns.  The Green's function may
+therefore be held in the factored form
+\begin{equation}
+  G = G_{\text{stale}} + X Y^{T},
+  \qquad X, Y \in \mathbb{C}^{N_{\text{dim}} \times k},
+\end{equation}
+in which an accepted flip appends $d$ columns to the panels $X$ and $Y$ instead
+of touching $G_{\text{stale}}$, and the block, rows and columns are reconstructed
+on demand at a cost of $\mathcal{O}(d^2 k)$ and $\mathcal{O}(N_{\text{dim}} d k)$
+respectively.  Once $k$ columns have accumulated the panels are flushed into
+$G_{\text{stale}}$ with a single \texttt{ZGEMM}, which is level-3 where the
+individual corrections were level-2.
+
+The factored region spans one time slice's sequential vertex loop and nothing
+else.  \texttt{Wrapgr\_mod} opens it after the hopping propagator has been
+applied and closes it before the slice is left, so the panels are flushed once
+per slice and the stabilization, the measurements, the global updates and the
+time-displaced machinery are all handed an ordinary Green's function.  Between
+two vertex updates the Green's function is conjugated with the vertex operator,
+which acts as $G \rightarrow L \, G \, R$ with $L$ and $R$ equal to the identity
+outside the support of the operator; since
+\begin{equation}
+  L \left( G_{\text{stale}} + X Y^{T} \right) R
+  = \left( L \, G_{\text{stale}} \, R \right) + \left( L X \right) \left( R^{T} Y \right)^{T}
+\end{equation}
+holds exactly, the conjugation passes through the factorization and is applied
+to the panels by \texttt{Op\_Wrap\_panels} at a cost that does not scale with
+$N_{\text{dim}}$.
+
+The scheme reassociates the arithmetic but consumes no random number that the
+immediate scheme does not, so it replays the same Markov chain, and the
+configuration written to \texttt{confout} is unchanged unless a proposal happens
+to lie within rounding of its acceptance threshold.
+
+\paragraph{Usage.}
+The delayed update is selected by the environment variable
+\texttt{ALF\_DELAY\_K} and is \emph{disabled by default}, so that a stock build
+follows the immediate path:
+\begin{itemize}
+  \item unset or \texttt{0} --- disabled;
+  \item a positive integer --- the depth $k$ is fixed at that value;
+  \item \texttt{auto} --- the depth is measured at start-up.  For each candidate
+        $k$ the cost of one flush and one panel reconstruction is timed at the
+        $N_{\text{dim}}$ of the model at hand and the cheapest is taken.  The
+        result depends on the machine and on the BLAS in use, which is why it is
+        measured rather than derived;
+  \item \texttt{formula} --- the closed form $k \approx \sqrt{2 N_{\text{dim}}}$
+        is used without timing anything.  This is the fallback when the probe
+        cannot allocate its scratch space, and it is also the control against
+        which the probe's choice can be compared.
+\end{itemize}
+For \texttt{auto} and \texttt{formula} the depth is clamped to the validated
+range $[8, 256]$.
+
+The depth is an environment variable rather than a namelist parameter because it
+changes no physics, and a run should not be identified by it.  The choice is
+nonetheless recorded: the depth in force and how it was arrived at
+(\texttt{off}, \texttt{fixed}, \texttt{probe} or \texttt{formula}) are written to
+each run's \texttt{info} file as \texttt{Delay depth} and
+\texttt{Delay depth from}, and the resolved depth --- together with the probe's
+cost curve, when it ran --- is printed at start-up.
 % 
 %------------------------------------------------------------
 \subsubsection{Sampling of $e^{-S_0}$}

@@ -1,5 +1,22 @@
 # Log of backward compatibility changes and critical bugs
 
+### 2026-08-29 Optional delayed (rank-$k$) Green's function updates
+Author: A. Gavrishev <br>
+
+The sequential single-spin-flip update can now hold the Green's function in the
+factored form $G = G_{\rm stale} + X Y^T$ across one time slice, batching the
+rank-$d$ corrections of $k$ accepted flips into a single level-3 flush. See
+Sec. "Delayed (rank-$k$) updates" in the documentation.
+
+The scheme is **disabled by default** and is enabled through the environment
+variable `ALF_DELAY_K`; a build that does not set it follows the immediate path
+exactly. It consumes no random number that the immediate scheme does not, so it
+replays the same Markov chain.
+
+Two lines are now written to every run's `info` file, whether or not the delay
+is enabled: `Delay depth` and `Delay depth from`. Code that parses `info` by
+line position rather than by key has to be adapted.
+
 ### 2026-01-28 factors of pi in analytical continuation
 Author F. Assaad <br>
 Merge request [!257](https://git.physik.uni-wuerzburg.de/ALF/ALF/-/merge_requests/257) | [GitHub](https://github.com/ALF-QMC/ALF/issues/587)
