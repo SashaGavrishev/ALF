@@ -130,6 +130,7 @@ Program Main
         Use Global_mod
         Use UDV_State_mod
         Use Wrapgr_mod
+        Use delayed_update_mod, only: delay_log
         Use Fields_mod
         Use WaveFunction_mod
         use entanglement_mod
@@ -414,6 +415,20 @@ Program Main
         If (get_N_Global_tau() > 0) then
            Call Wrapgr_alloc
         endif
+        ! Unconditional, unlike GR_ST above: the delayed update's panels serve the
+        ! sequential vertex loop, which runs on every slice whether or not
+        ! global-in-tau moves are enabled. No-op when the delay is off.
+        Call Wrapgr_delay_alloc
+        ! Rank-guarded here rather than inside the module, which is deliberately
+        ! free of MPI and so cannot decide for itself whether to print. One line
+        ! when the delay is off, the probe's curve when it ran.
+#ifdef MPI
+        If ( Irank == 0 ) then
+#endif
+           Call delay_log(6)
+#ifdef MPI
+        endif
+#endif
         
 #if defined(HDF5)
 #if defined(TEMPERING)
@@ -925,6 +940,7 @@ Program Main
         If (get_N_Global_tau() > 0) then
            Call Wrapgr_dealloc
         endif
+        Call Wrapgr_delay_dealloc
         do nf = 1, N_FL
           do n = 1, size(OP_V,1)
             call Op_clear(Op_V(n,nf),Op_V(n,nf)%N)
