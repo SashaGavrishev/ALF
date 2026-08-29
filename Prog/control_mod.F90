@@ -108,27 +108,6 @@ module Control
     ! depth alone cannot show it.
     Character (Len=16), private, save :: Delay_depth_from = 'off'
 
-    ! Per-slice discrepancy between the factored Green's function and a shadow
-    ! carried by the immediate scheme, under ALF_DELAY_VERIFY. This is the direct
-    ! measurement of how far the reconstruction drifts -- the risk the cost model
-    ! could not price, since it says nothing about how error grows in the
-    ! factored form. Absent from the info file unless the mode was on, because a
-    ! zero and "never measured" must not read alike.
-    Real    (Kind=Kind(0.d0)), private, save :: Delay_err_mean, Delay_err_max
-    Integer (Kind=Kind(0.d0)), private, save :: NC_delay_err
-
-    ! Disagreement between the two ways one Green's-function element is
-    ! reconstructed: the d x d block sums the panels directly, the row and column
-    ! accessors accumulate them through BLAS. The immediate scheme takes both
-    ! from the same GR element, which is what makes the acceptance determinant
-    ! and the Woodbury denominator cancel *exactly*; under the delay they only
-    ! cancel approximately, and this is the size of that gap. Booked separately
-    ! from Delay_err_max because they answer different questions -- that one is
-    ! reconstruction against truth, this one is reconstruction against itself,
-    ! and a scheme can be fine on the first while the solve amplifies the second.
-    Real    (Kind=Kind(0.d0)), private, save :: Delay_split_max
-    Integer (Kind=Kind(0.d0)), private, save :: NC_delay_split
-
     Integer (Kind=kind(0.d0)),  private, save :: NC_Glob_up, ACC_Glob_up
     Integer (Kind=kind(0.d0)),  private, save :: NC_HMC_up, ACC_HMC_up
     Integer (Kind=kind(0.d0)),  private, save :: NC_Temp_up, ACC_Temp_up
@@ -194,12 +173,6 @@ module Control
         NC_hop_timed    = 0
 
         NC_near_tie     = 0
-
-        Delay_err_mean  = 0.d0
-        Delay_err_max   = 0.d0
-        NC_delay_err    = 0
-        NC_delay_split  = 0
-        Delay_split_max = 0.d0
 
         size_clust_Glob_up    = 0.d0
         size_clust_Glob_ACC_up= 0.d0
@@ -316,35 +289,6 @@ module Control
         Delay_depth_used = k
         if (Present(source)) Delay_depth_from = source
       end Subroutine Control_set_delay_depth
-
-!--------------------------------------------------------------------
-!> @brief
-!> Book one slice's factored-against-immediate discrepancy.
-!> @details
-!> See Delay_err_max. One call is one flavour of one closed region, i.e. one
-!> time slice, so the count says how many slices were checked.
-!--------------------------------------------------------------------
-      Subroutine Control_delay_verify(discrepancy)
-        Implicit none
-        Real (Kind=Kind(0.d0)), Intent(In) :: discrepancy
-        NC_delay_err   = NC_delay_err + 1
-        Delay_err_mean = Delay_err_mean + discrepancy
-        if (discrepancy > Delay_err_max) Delay_err_max = discrepancy
-      end Subroutine Control_delay_verify
-
-!--------------------------------------------------------------------
-!> @brief
-!> Book one block-against-accessor reconstruction disagreement.
-!> @details
-!> See Delay_split_max. Relative, so it is comparable across sizes and depths,
-!> which is the point -- the question is whether it grows with k.
-!--------------------------------------------------------------------
-      Subroutine Control_delay_split(discrepancy)
-        Implicit none
-        Real (Kind=Kind(0.d0)), Intent(In) :: discrepancy
-        NC_delay_split = NC_delay_split + 1
-        if (discrepancy > Delay_split_max) Delay_split_max = discrepancy
-      end Subroutine Control_delay_split
 
 !--------------------------------------------------------------------
 !> @brief
@@ -725,21 +669,10 @@ module Control
            ! immediate updates.
            Write(50,*) ' Delay depth                : ', Delay_depth_used
            Write(50,*) ' Delay depth from           : ', Trim(Delay_depth_from)
-#ifndef ALF_NO_DELAY
+           ! Interprets a divergence between two builds as reassociation rather
+           ! than as a bug: a proposal within rounding of its threshold can be
+           ! decided either way by a last-bit difference.
            Write(50,*) ' Metropolis near ties       : ', NC_near_tie
-#endif
-           ! Omitted under ALF_NO_DELAY, where upgrade_mod compiles the pre-delay
-           ! comparison and never calls Control_near_tie. Writing the untouched 0
-           ! would be the one thing the comment above forbids: a count that was
-           ! never taken, reading exactly like a count that came out zero.
-           If ( NC_delay_err > 0 ) then
-              Write(50,*) ' Delay reconstruction Mean, Max : ', &
-                   &      Delay_err_mean/dble(NC_delay_err), Delay_err_max
-              Write(50,*) ' Delay slices checked       : ', NC_delay_err
-           Endif
-           If ( NC_delay_split > 0 ) then
-              Write(50,*) ' Delay block-accessor split : ', Delay_split_max
-           Endif
 #if defined(TEMPERING)
            Write(50,*) ' Acceptance Tempering       : ', ACC_Temp
 #endif

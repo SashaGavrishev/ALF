@@ -52,9 +52,7 @@ Module Wrapgr_mod
   Use Hamiltonian_main
   Use Hop_mod
   use upgrade_mod
-#ifndef ALF_NO_DELAY
   use delayed_update_mod
-#endif
 
   Implicit none
 
@@ -88,17 +86,9 @@ Contains
 !> because GR_ST exists solely for the multi-flip restore. The panels instead
 !> serve the sequential vertex loop, which runs on every slice regardless, so
 !> this must be called unconditionally.
-!>
-!> Under -DALF_NO_DELAY the delayed path is not compiled at all and this reports
-!> a depth of -1. That is deliberately not the 0 a runtime-disabled build writes:
-!> the two are different binaries, and a consistency run that cannot tell them
-!> apart would silently compare one arm against itself.
 !--------------------------------------------------------------------
   Subroutine Wrapgr_delay_alloc
     Implicit none
-#ifdef ALF_NO_DELAY
-    call Control_set_delay_depth(-1, 'compiled-out')
-#else
     Integer :: n, nf, dmax
     ! Widest wrap support in the model. Op%N, not Op%N_non_zero: the conjugation
     ! the panels have to follow touches all N rows.
@@ -111,15 +101,12 @@ Contains
     call delay_alloc(Ndim, N_FL, dmax)
     ! delay_alloc has already resolved the depth, so this call is the cached
     ! value -- it does not re-run the probe.
-    call Control_set_delay_depth(delay_depth(Ndim), delay_source_name())
-#endif
+    call Control_set_delay_depth(delay_depth(Ndim), delay_source)
   end Subroutine Wrapgr_delay_alloc
 
   Subroutine Wrapgr_delay_dealloc
     Implicit none
-#ifndef ALF_NO_DELAY
     call delay_dealloc()
-#endif
   end Subroutine Wrapgr_delay_dealloc
 
 !--------------------------------------------------------------------
@@ -162,18 +149,14 @@ Contains
     ! the caller returns. Everything downstream -- stabilisation, measurement,
     ! global moves -- therefore sees an ordinary Green's function and needs no
     ! change. No-op when the delay is disabled.
-#ifndef ALF_NO_DELAY
-    call delay_open(GR)
-#endif
+    call delay_open()
     Do n = Nt_sequential_start,Nt_sequential_end
        Do nf_eff = 1, N_FL_eff
           nf=Calc_Fl_map(nf_eff)
           HS_Field =  nsigma%f(n,ntau1)
           N_type = 1
           Call Op_Wrapup(Gr(:,:,nf),Op_V(n,nf),HS_Field,Ndim,N_Type,ntau1)
-#ifndef ALF_NO_DELAY
           call delay_wrap(nf,Op_V(n,nf),HS_Field,N_Type,ntau1,'u')
-#endif
        enddo
        nf = 1
        T0_proposal       = 1.5D0
@@ -199,14 +182,10 @@ Contains
           nf=Calc_Fl_map(nf_eff)
           N_type =  2
           Call Op_Wrapup(Gr(:,:,nf),Op_V(n,nf),HS_Field,Ndim,N_Type,ntau1)
-#ifndef ALF_NO_DELAY
           call delay_wrap(nf,Op_V(n,nf),HS_Field,N_Type,ntau1,'u')
-#endif
        enddo
     Enddo
-#ifndef ALF_NO_DELAY
     call delay_close(GR)
-#endif
 
     If ( N_Global_tau > 0 ) then
        m         = Nt_sequential_end
@@ -259,9 +238,7 @@ Contains
     
     ! Mirror of WRAPGRUP: the region spans the sequential loop only, opening after
     ! the global-in-tau moves above and closing before the propagator below.
-#ifndef ALF_NO_DELAY
-    call delay_open(GR)
-#endif
+    call delay_open()
     Do n =  Nt_sequential_end, Nt_sequential_start, -1
        N_type = 2
        nf = 1
@@ -269,9 +246,7 @@ Contains
        do nf_eff = 1,N_FL_eff
           nf=Calc_Fl_map(nf_eff)
           Call Op_Wrapdo( Gr(:,:,nf), Op_V(n,nf), HS_Field, Ndim, N_Type,ntau)
-#ifndef ALF_NO_DELAY
           call delay_wrap(nf,Op_V(n,nf),HS_Field,N_Type,ntau,'d')
-#endif
        enddo
        !Write(6,*) 'Upgrade : ', ntau,n 
        nf = 1
@@ -302,14 +277,10 @@ Contains
        do nf_eff = 1,N_FL_eff
           nf=Calc_Fl_map(nf_eff)
           Call Op_Wrapdo( Gr(:,:,nf), Op_V(n,nf), HS_Field, Ndim, N_Type, ntau )
-#ifndef ALF_NO_DELAY
           call delay_wrap(nf,Op_V(n,nf),HS_Field,N_Type,ntau,'d')
-#endif
        enddo
     enddo
-#ifndef ALF_NO_DELAY
     call delay_close(GR)
-#endif
     DO nf_eff = 1,N_FL_eff
        nf=Calc_Fl_map(nf_eff)
        Call Hop_mod_mmthl   (GR(:,:,nf), nf,ntau)
@@ -347,9 +318,7 @@ Contains
     Integer :: n, nf, nf_eff, N_Type
     Complex (Kind=Kind(0.d0)) :: HS_Field
 
-#ifndef ALF_NO_DELAY
     call delay_assert_inactive('Wrapgr_PlaceGR')
-#endif
 
     If (m == m1)  then
        return
@@ -445,9 +414,7 @@ Contains
     ! GR_st = Gr and its restore below copy the whole matrix, which a factored
     ! Green function would silently corrupt. Both call sites lie outside the
     ! sequential loop, so this asserts that invariant rather than handling a case.
-#ifndef ALF_NO_DELAY
     call delay_assert_inactive('Wrapgr_Random_update')
-#endif
 
     Allocate ( Flip_list(Size(Op_V,1)), Flip_value(Size(Op_V,1)), Flip_value_st(Size(Op_V,1)) )
 

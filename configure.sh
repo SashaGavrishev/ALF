@@ -280,12 +280,12 @@ EOF
 # Set DFTI_FLAGS (-DALF_MKL_DFTI plus an include path) and DFTI_OBJ, or leave both
 # empty. Called only when the chosen BLAS/LAPACK is MKL.
 #
-# The flat-band Hamiltonian's momentum-space JxJx transforms both cell indices of an
-# Ndim x Ndim matrix twice per imaginary-time slice. MKL's DFTI runs that on the natural
-# strides, where ZGEMM needs the contracted axis leading and so needs a permutation; from
-# L = 16 up that is worth 2-2.5x on the transform packed. Without the module the
-# Hamiltonian keeps its portable separable-ZGEMM transform and produces the same numbers,
-# so a failure here is a warning, not an error.
+# A Hamiltonian measuring a momentum-space current correlator transforms both cell indices
+# of an Ndim x Ndim matrix twice per imaginary-time slice. MKL's DFTI runs that on the
+# natural strides, where ZGEMM needs the contracted axis leading and so needs a
+# permutation; from L = 16 up that is worth 2-2.5x on the transform packed. Without the
+# module such a Hamiltonian keeps its portable separable-ZGEMM transform and produces the
+# same numbers, so a failure here is a warning, not an error.
 #
 # Finding mkl_dfti.mod is the fiddly part and -qmkl does not put it on the module path.
 # MKL ships the module *source* at $MKLROOT/include/mkl_dfti.f90 and precompiles it per
@@ -336,7 +336,7 @@ set_dfti_flags()
     break
   done
   printf "${RED}Warning: no MKL DFTI Fortran module under %s;${NC}\n" "$MKLROOT" 1>&2
-  printf "${RED}  the flat-band JxJx transform falls back to its portable ZGEMM form.${NC}\n" 1>&2
+  printf "${RED}  momentum-space transforms fall back to their portable ZGEMM form.${NC}\n" 1>&2
   return 1
 }
 

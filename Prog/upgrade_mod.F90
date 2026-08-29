@@ -52,8 +52,8 @@ module upgrade_mod
    ! cross-check that the sampling is unbiased, and 0 disables the timing.
    integer, parameter, private :: UPDATE_SAMPLE_DEFAULT = 61
    integer, private, save :: update_sample = -1
-   ! 64-bit: flat-band L=24 does 3*Ndim = 3456 vertices per slice, so a long
-   ! production segment passes 2**31 accepted updates and a default integer
+   ! 64-bit: a model with a few thousand vertices per slice passes 2**31
+   ! accepted updates over a long production segment, and a default integer
    ! would overflow. Signed overflow is undefined, and this compiler is already
    ! known to constant-fold wrap-dependent arithmetic at -O3.
    Integer (Kind=Kind(0.d0)), private, save :: update_calls = 0
@@ -153,9 +153,7 @@ module upgrade_mod
         Use Random_wrap
         Use Control
         Use Fields_mod
-#ifndef ALF_NO_DELAY
         Use delayed_update_mod
-#endif
         use iso_fortran_env, only: output_unit, error_unit
         Implicit none
 
@@ -176,18 +174,12 @@ module upgrade_mod
         Integer ::  n,m,nf, nf_eff, i, Op_dim, op_dim_nf
         Complex (Kind=Kind(0.d0)) :: Z, D_Mat, myexp, s1, s2
 
-#ifndef ALF_NO_DELAY
         Real    (Kind=Kind(0.d0)) :: Weight, tmp_r
-#else
-        Real    (Kind=Kind(0.d0)) :: Weight
-#endif
         Complex (Kind=Kind(0.d0)) :: alpha, beta, g_loc
         Complex (Kind=Kind(0.d0)), Dimension(:, :), Allocatable :: Mat, Delta
-#ifndef ALF_NO_DELAY
         ! Reconstructed views of the current Green's function, used only when a
         ! factored region is open; see delayed_update_mod.
         Complex (Kind=Kind(0.d0)), Dimension(:, :), Allocatable :: Gblk, g_rows, g_cols
-#endif
         Complex (Kind=Kind(0.d0)), Dimension(:, :), Allocatable :: u, v
         Complex (Kind=Kind(0.d0)), Dimension(:, :), Allocatable :: y_v, xp_v
         Complex (Kind=Kind(0.d0)), Dimension(:, :), Allocatable :: x_v
@@ -213,9 +205,7 @@ module upgrade_mod
         if (op_dim > 0) then
            Allocate ( Mat(Op_dim,Op_Dim), Delta(Op_dim,N_FL_eff), u(Ndim,Op_dim), v(Ndim,Op_dim) )
            Allocate ( y_v(Ndim,Op_dim), xp_v(Ndim,Op_dim), x_v(Ndim,Op_dim) )
-#ifndef ALF_NO_DELAY
-           if (delay_active()) Allocate ( Gblk(Op_dim,Op_dim), g_rows(Ndim,Op_dim), g_cols(Ndim,Op_dim) )
-#endif
+           if (delay_active) Allocate ( Gblk(Op_dim,Op_dim), g_rows(Ndim,Op_dim), g_cols(Ndim,Op_dim) )
         endif
 
         ! Compute the ratio
@@ -229,8 +219,7 @@ module upgrade_mod
            if (op_v(n_op,nf)%get_g_t_alloc()) g_loc = Op_V(n_op,nf)%g_t(nt)
            Z1 = g_loc * ( nsigma_new%Phi(1,1) -  nsigma%Phi(n_op,nt) )
            op_dim_nf = Op_V(n_op,nf)%N_non_zero
-#ifndef ALF_NO_DELAY
-           if (delay_active() .and. op_dim_nf > 0) then
+           if (delay_active .and. op_dim_nf > 0) then
               ! Same arithmetic against the current Green's function, which under
               ! the delay is the stale matrix plus the panels. O(d**2*k), and paid
               ! on rejected proposals too -- the cost the delay adds.
@@ -245,7 +234,6 @@ module upgrade_mod
                  Mat(m,m) = myexp + Mat(m,m)
               Enddo
            else
-#endif
            Do m = 1,op_dim_nf
               myexp = exp( Z1* Op_V(n_op,nf)%E(m) )
               Z = myexp - 1.d0
@@ -255,9 +243,7 @@ module upgrade_mod
               Enddo
               Mat(m,m) = myexp + Mat(m,m)
            Enddo
-#ifndef ALF_NO_DELAY
            endif
-#endif
            If (op_dim_nf == 0 ) then
               D_mat = 1.0d0
            elseIf (op_dim_nf == 1 ) then
@@ -303,10 +289,9 @@ module upgrade_mod
         endif
 
         toggle = .false.
-#ifndef ALF_NO_DELAY
         ! Hoisted out of the comparison so the draw can be counted as well as
         ! used. One call either way, so the RNG stream and the decision are
-        ! unchanged -- Tier 0 asserts exactly that.
+        ! unchanged as against the pre-delay statement it replaces.
         tmp_r = ranf_wrap()
         ! A decision this close to its threshold can be flipped by a last-bit
         ! difference, which is what a delayed update introduces. In Intermediate
@@ -314,16 +299,6 @@ module upgrade_mod
         ! since that mode accepts by construction and takes no decision.
         if ( abs(Weight - tmp_r) < 1.d-12 )  Call Control_near_tie()
         if ( Weight > tmp_r )  Then
-#else
-        ! The near-tie counter exists to interpret a divergence as reassociation
-        ! rather than as a bug. With the delayed path compiled out there is no
-        ! reassociation to interpret, so the hoist goes too and this is the
-        ! pre-delay statement verbatim -- which is the whole claim of this build:
-        ! a cross-build comparison that finds a difference must be able to say
-        ! the difference came from the merge, not from an added branch sitting in
-        ! the accept/reject hot path where -ffast-math is known to reassociate.
-        if ( Weight > ranf_wrap() )  Then
-#endif
            toggle = .true.
            If ( str_to_upper(mode) == "FINAL"  )  Phase = Phase * Ratiotot/sqrt(Ratiotot*conjg(Ratiotot))
            !Write(6,*) 'Accepted : ', Ratiotot
@@ -348,8 +323,7 @@ module upgrade_mod
                 beta = 0.D0
                 call zlaset('N', Ndim, op_dim_nf, beta, beta, u, size(u, 1))
                 call zlaset('N', Ndim, op_dim_nf, beta, beta, v, size(v, 1))
-#ifndef ALF_NO_DELAY
-                if (delay_active()) then
+                if (delay_active) then
                     ! v is the only place GR's rows enter, and the Woodbury chain
                     ! below reads nothing but u, v, x_v and y_v. So reconstructing
                     ! the rows here makes every later quantity current -- including
@@ -364,7 +338,6 @@ module upgrade_mod
                         v(Op_V(n_op,nf)%P(n), n) = 1.d0 - g_rows(Op_V(n_op,nf)%P(n), n)
                     enddo
                 else
-#endif
                 do n = 1,op_dim_nf
                     u( Op_V(n_op,nf)%P(n), n) = Delta(n,nf_eff)
                     do i = 1,Ndim
@@ -372,9 +345,7 @@ module upgrade_mod
                     enddo
                     v(Op_V(n_op,nf)%P(n), n)  = 1.d0 - GR( Op_V(n_op,nf)%P(n),  Op_V(n_op,nf)%P(n), nf)
                 enddo
-#ifndef ALF_NO_DELAY
                 endif
-#endif
 
                 call zlaset('N', Ndim, op_dim_nf, beta, beta, x_v, size(x_v, 1))
                 call zlaset('N', Ndim, op_dim_nf, beta, beta, y_v, size(y_v, 1))
@@ -399,8 +370,7 @@ module upgrade_mod
                     call zscal(Ndim, Z, x_v(1, n), 1)
                     Deallocate(syu, sxv)
                 enddo
-#ifndef ALF_NO_DELAY
-                IF (delay_active()) THEN
+                IF (delay_active) THEN
                     ! Same rank-d update, appended to the panels instead of applied
                     ! to the matrix. The columns come from delay_col for the same
                     ! reason the rows did; the coefficient is folded into X inside
@@ -421,9 +391,6 @@ module upgrade_mod
                         call delay_append(nf, alpha, xp_v, y_v, op_dim_nf, GR)
                     ENDIF
                 ELSEIF (size(Op_V(n_op,nf)%P, 1) == 1) THEN
-#else
-                IF (size(Op_V(n_op,nf)%P, 1) == 1) THEN
-#endif
                     CALL ZCOPY(Ndim, gr(1, Op_V(n_op,nf)%P(1), nf), 1, xp_v(1, 1), 1)
                     Z = -x_v(Op_V(n_op,nf)%P(1), 1)
                     CALL ZGERU(Ndim, Ndim, Z, xp_v(1,1), 1, y_v(1, 1), 1, gr(1,1,nf), Ndim)
@@ -466,9 +433,7 @@ module upgrade_mod
         if (op_dim > 0) then
            deallocate ( Mat, Delta, u, v )
            deallocate ( y_v, xp_v, x_v )
-#ifndef ALF_NO_DELAY
            if (allocated(Gblk)) deallocate ( Gblk, g_rows, g_cols )
-#endif
         endif
 
         If ( str_to_upper(mode) == "FINAL" )  then
