@@ -2,7 +2,7 @@
 
 ### 2026-08-29 Optional delayed (rank-$k$) Green's function updates
 Author: A. Gavrishev <br>
-Merge request ... | ...
+[GitHub](https://github.com/ALF-QMC/ALF/pull/646)
 
 The sequential single-spin-flip update can now hold the Green's function in the
 factored form $G = G_{\rm stale} + X Y^T$ across one time slice, batching the
