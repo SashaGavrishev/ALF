@@ -64,7 +64,9 @@
 !> and pay Ndim**2 only once every k accepted flips, through a level-3 LAPACK
 !> operation, ZGEMM. Traffic per accepted flip is then expected to fall
 !> from ~2*Ndim**2 to ~2*d*Ndim*k + 2*Ndim**2/k. The matrices X and Y are
-!> referred to as "panels".
+!> referred to as "panels". The scheme, including its generalisation to vertices
+!> of rank d > 1, follows F. Sun and X. Y. Xu, Phys. Rev. B 109, 235140 (2024);
+!> see the "Delayed (rank-k) updates" section of the ALF documentation.
 !>
 !> The implementation is such that a Green's function is in its "factorised"
 !> form only within a single time slice; thus stabilisation, measurement and

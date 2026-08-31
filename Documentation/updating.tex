@@ -71,7 +71,8 @@ proposals we do not require the updated Green's function to be stored as a
 full matrix. Instead, we just need the $d \times d$ block $G(P,P)$
 (where $P$ references \texttt{Op\%P}) to form the acceptance ratio,
 and, on subsequent acceptance of a proposal, $d$ rows and $d$ columns.
-Therefore, we can hold the Green's function in a ``factorised'' form
+Therefore, following Ref.~\cite{Sun2024}, we can hold the Green's function in a
+``factorised'' form
 \begin{equation}
   G = G_{\text{stale}} + X Y^{T},
   \qquad X, Y \in \mathbb{C}^{N_{\text{dim}} \times k},
