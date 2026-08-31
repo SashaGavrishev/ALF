@@ -618,8 +618,17 @@ contains
       if (allocated(xp)) deallocate (xp)
       if (allocated(yp)) deallocate (yp)
       if (allocated(ncol)) deallocate (ncol)
-      kmax   = 0
-      delay_active = .false.
+      ! Back to the state delay_alloc found, so that a second allocation cannot
+      ! inherit the shape of the first. The parsed ALF_DELAY_K is left cached:
+      ! it describes the request, not the allocation.
+      kmax          = 0
+      panel_w       = 0
+      ndim_s        = 0
+      nfl_s         = 0
+      k_resolved    = 0
+      depth_imposed = .false.
+      delay_source  = 'off'
+      delay_active  = .false.
    end subroutine delay_dealloc
 
 !-------------------------------------------------------------------------------
