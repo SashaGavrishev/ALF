@@ -84,8 +84,7 @@ Contains
 !> @details
 !> Separate from Wrapgr_alloc, which main only calls when N_Global_tau > 0
 !> because GR_ST exists solely for the multi-flip restore. The panels instead
-!> serve the sequential vertex loop, which runs on every slice regardless, so
-!> this must be called unconditionally.
+!> serve the sequential vertex loop, so main calls this whenever that loop runs.
 !--------------------------------------------------------------------
   Subroutine Wrapgr_delay_alloc
     Implicit none
