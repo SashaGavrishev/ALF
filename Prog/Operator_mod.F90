@@ -961,13 +961,11 @@ Contains
 !> @details
 !> A delayed (rank-k) update holds the Green's function as `G = G_stale + X*Y^T`.
 !> Op_Wrapup and Op_Wrapdo act as `G -> L*G*R` with L and R the identity outside
-!> `Op%P(1:Op%N)` -- every branch of both, verified case by case -- so
+!> `Op%P(1:Op%N)`, hence
 !>
-!>     L*(G_stale + X*Y^T)*R = (L*G_stale*R) + (L*X)*(R^T*Y)^T
+!>     L*(G_stale + X*Y^T)*R = (L*G_stale*R) + (L*X)*(R^T*Y)^T.
 !>
-!> exactly. This routine applies L to X and R^T to Y, which costs O(Op%N*ncols)
-!> instead of anything that scales with Ndim*ncols. It is what lets the factored
-!> form survive the vertex loop, where the wrap runs between every two updates.
+!> This routine applies L to X and R^T to Y, costing O(Op%N**2*ncols).
 !>
 !> Converting the wrap's right-multiply into a left-multiply on Y:
 !>
@@ -975,12 +973,14 @@ Contains
 !>     wrap does ZSLGEMM('r','T',A)  ->  here ZSLGEMM('l','N',A)
 !>     wrap does ZSLGEMM('r','c',A)  ->  here ZSLGEMM('l','N',conjg(A))
 !>
-!> The last is the trap: ZSLGEMM has no conjugate-without-transpose, so A must be
-!> conjugated into a temporary first. Op%N is small, so that is free.
+!> Note: ZSLGEMM has no conjugate-without-transpose and therefore A must be
+!> conjugated into a temporary first. For most typical models Op%N is small,
+!> and hence the cost of this operation is negligible.
 !>
-!> This mirrors sixteen branches of Op_Wrapup/Op_Wrapdo and will silently diverge
-!> if either is edited. It lives beside them for that reason, and testsuite test
-!> 37-delayed-wrap is the guard.
+!> This subroutine mirrors the sixteen branches of Op_Wrapup/Op_Wrapdo and hence
+!> care must be taken to keep the logic synchronised between them. Within
+!> the testsuite, test 37-delayed-wrap forms an explicit check to catch any
+!> such drift.
 !>
 !> @param[inout] Xpan(Ndim,ncols), Ypan(Ndim,ncols) The panels.
 !> @param[in] updo 'u' to mirror Op_Wrapup, 'd' to mirror Op_Wrapdo.
