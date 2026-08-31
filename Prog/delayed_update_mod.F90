@@ -85,7 +85,7 @@ module delayed_update_mod
    implicit none
 
    private
-   public :: delay_alloc, delay_dealloc, delay_depth
+   public :: delay_alloc, delay_dealloc, delay_depth, delay_set_depth
    public :: delay_assert_inactive, delay_open, delay_close
    public :: delay_block, delay_row, delay_col, delay_append, delay_flush
    public :: delay_wrap, delay_pending, delay_log
@@ -118,6 +118,10 @@ module delayed_update_mod
 
    ! The resolved "auto" depth, cached.
    integer, private, save :: k_resolved = 0
+
+   ! Set when the caller has imposed a depth through delay_set_depth, which
+   ! then stands in for whatever ALF_DELAY_K would have resolved to here.
+   logical, private, save :: depth_imposed = .false.
 
    ! How the depth in force was arrived at, for the info file: off, fixed,
    ! probe or formula. Protected rather than behind an accessor, since
@@ -213,6 +217,13 @@ contains
       integer :: length, status    ! from get_environment_variable
       integer :: value             ! the depth, where the request was a number
 
+      ! A depth imposed from outside stands: under MPI one rank resolves and
+      ! hands the answer to the others, which must not re-read or re-measure.
+      if (depth_imposed) then
+         delay_depth = k_resolved
+         return
+      endif
+
       if (k_request == K_UNREAD) then
          k_request = 0
          call get_environment_variable("ALF_DELAY_K", text, length, status)
@@ -254,6 +265,31 @@ contains
          if (k_request > 0) delay_source = 'fixed'
       end select
    end function delay_depth
+
+!-------------------------------------------------------------------------------
+!> @brief
+!> Impose a depth from outside, in place of reading ALF_DELAY_K here.
+!>
+!> @details
+!> "auto" resolves the depth by timing, and under MPI that timing has to be
+!> taken on one rank alone: delay_probe holds an Ndim**2 scratch, so a fully
+!> occupied node would carry one per rank, and ranks measuring at once contend
+!> for the very memory system they are measuring. Wrapgr_delay_alloc therefore
+!> has one rank resolve the depth and broadcasts it. The module itself stays
+!> free of MPI.
+!>
+!> Must be called before delay_alloc. Any later delay_depth returns k verbatim.
+!-------------------------------------------------------------------------------
+
+   subroutine delay_set_depth(k, source)
+      implicit none
+      integer, intent(in) :: k                ! the depth to use, 0 for off
+      character (Len=*), intent(in) :: source ! how it was arrived at, as
+      !                                         delay_source records it
+      depth_imposed = .true.
+      k_resolved    = k
+      delay_source  = source
+   end subroutine delay_set_depth
 
 !-------------------------------------------------------------------------------
 !> @brief

@@ -85,10 +85,22 @@ Contains
 !> Separate from Wrapgr_alloc, which main only calls when N_Global_tau > 0
 !> because GR_ST exists solely for the multi-flip restore. The panels instead
 !> serve the sequential vertex loop, so main calls this whenever that loop runs.
+!>
+!> Collective over Group_Comm: under "auto" the depth is resolved by timing on
+!> rank 0 alone and broadcast, so that the ranks sharing a node neither each
+!> hold the probe's Ndim**2 scratch nor contend for the memory system they are
+!> measuring. It also keeps one depth across the group rather than one per rank.
 !--------------------------------------------------------------------
   Subroutine Wrapgr_delay_alloc
+#ifdef MPI
+    Use mpi
+#endif
     Implicit none
     Integer :: n, nf, dmax
+#ifdef MPI
+    Integer :: k, irank_l, ierr
+    Character (Len=16) :: source
+#endif
     ! Widest wrap support in the model. Op%N, not Op%N_non_zero: the conjugation
     ! the panels have to follow touches all N rows.
     dmax = 1
@@ -97,6 +109,18 @@ Contains
           if (Op_V(n,nf)%N > dmax) dmax = Op_V(n,nf)%N
        enddo
     enddo
+#ifdef MPI
+    k      = 0
+    source = 'off'
+    call MPI_Comm_rank(Group_Comm, irank_l, ierr)
+    if (irank_l == 0) then
+       k      = delay_depth(Ndim)
+       source = delay_source
+    endif
+    call MPI_Bcast(k,      1,  MPI_INTEGER,   0, Group_Comm, ierr)
+    call MPI_Bcast(source, 16, MPI_CHARACTER, 0, Group_Comm, ierr)
+    call delay_set_depth(k, source)
+#endif
     call delay_alloc(Ndim, N_FL, dmax)
     ! delay_alloc has already resolved the depth, so this call is the cached
     ! value -- it does not re-run the probe.
