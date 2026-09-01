@@ -78,7 +78,14 @@ runs:
         mkdir -p "$ALF_DIR/testsuite/tests"
         cd "$ALF_DIR/testsuite/tests"
         if echo "$ALF_FC" | grep -q "mpiifort -fc=ifx"; then exit 0; fi
-        cmake ..
+        # The delayed-vs-immediate comparison drives ALF.out directly, the way a
+        # plain noMPI leg builds it; it is opt-in via ALF_TEST_DELAYED so the
+        # other legs (MPI, TEMPERING, PARALLEL_PARAMS) don't try to run it.
+        if echo "$MODE" | grep -iq -e "serial" -e "noMPI"; then
+          ALF_TEST_DELAYED=1 cmake ..
+        else
+          cmake ..
+        fi
         cmake --build . --target all --config Release
         ctest -VV -O log.txt
         grep "tests passed" log.txt | cut -d " " -f 1
