@@ -10,9 +10,12 @@
 #
 # Here a sampler is run twice on each parameter set, once with the delay off and
 # once with it on, from the same seeds. We require the auxiliary field
-# configuration left behind to be byte identical. Up to Metropolis
-# near-ties the two schemes accept exactly the same flips, so this is an
-# equality and not a tolerance.
+# configuration left behind to be identical. Up to Metropolis near-ties the
+# two schemes accept exactly the same flips, so this is an equality and not a
+# tolerance. An HDF5 build writes confout_0.h5 instead of confout_0; two such
+# files holding identical data still differ byte-for-byte (HDF5 tracks
+# per-object timestamps by default), so that variant is compared
+# dataset-by-dataset with h5diff rather than cmp.
 #
 # Usage: delayed_vs_immediate.sh <ALF.out> <source dir> <work dir>
 
@@ -55,6 +58,10 @@ for model in hubbard tv; do
 
    imm="$work/$model.immediate/confout_0"
    del="$work/$model.delayed/confout_0"
+   if [ ! -f "$imm" ] && [ -f "$imm.h5" ]; then
+      imm="$imm.h5"
+      del="$del.h5"
+   fi
 
    if [ ! -f "$imm" ] || [ ! -f "$del" ]; then
       echo "FAIL: $model: no confout_0 to compare"
@@ -63,7 +70,8 @@ for model in hubbard tv; do
    fi
 
    # Guard against a vacuous pass: if the delayed run did not actually take the
-   # delayed path, the two runs are the same run and cmp proves nothing.
+   # delayed path, the two runs are the same run and the comparison proves
+   # nothing.
    depth=$(awk '/Delay depth  /{print $(NF)}' "$work/$model.delayed/info")
    if [ "${depth:-0}" -ne 8 ]; then
       echo "FAIL: $model: delayed run reports delay depth '${depth:-<none>}', expected 8"
@@ -71,10 +79,22 @@ for model in hubbard tv; do
       continue
    fi
 
-   if cmp -s "$imm" "$del"; then
+   diff_log=""
+   case "$imm" in
+      *.h5)
+         diff_log="$work/$model.h5diff.log"
+         if h5diff "$imm" "$del" > "$diff_log" 2>&1; then identical=0; else identical=1; fi
+         ;;
+      *)
+         if cmp -s "$imm" "$del"; then identical=0; else identical=1; fi
+         ;;
+   esac
+
+   if [ "$identical" -eq 0 ]; then
       echo "PASS: $model: confout_0 identical, delay depth $depth"
    else
       echo "FAIL: $model: confout_0 differs between immediate and delayed"
+      [ -n "$diff_log" ] && tail -20 "$diff_log"
       status=1
    fi
 done
