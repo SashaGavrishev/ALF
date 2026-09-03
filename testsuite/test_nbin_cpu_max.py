@@ -1,54 +1,39 @@
-"""The run stops at whichever of NBin or CPU_MAX comes first.
+#!/usr/bin/env python3
+"""NBin and CPU_MAX are both bounds; the run stops at whichever comes first.
 
-Upstream ALF discards NBin whenever CPU_MAX is set, so a run always burns its
-whole time budget. This fork gates that override on NBin being unset, which is
-what lets a checkpoint-restart driver ask for an exact number of bins and still
-stay inside its wall-clock allocation.
+Runs the Start parameter set with several (NBin, CPU_MAX) pairs and checks the
+bins actually written to data.h5. Needs a binary built with HDF5, and runs it
+directly, so noMPI:
 
-Drives the ``Start`` parameter set already in the repository, rewriting only the
-keys it varies, so the test needs no Python package beyond h5py -- in
-particular no py_alf, whose forks differ in the arguments they accept.
+    . configure.sh GNU noMPI HDF5 && make program
+    ./testsuite/test_nbin_cpu_max.py
 
-Needs a built binary, so it skips unless ``Prog/ALF.out`` exists:
-
-    cd ALF && source configure.sh GNU noMPI HDF5 && make program
-    pytest testsuite/test_nbin_cpu_max.py
+Exits non-zero on the first failed check.
 """
 
-import os
 import shutil
 import subprocess
+import sys
+import tempfile
 from pathlib import Path
 
-import pytest
-
-h5py = pytest.importorskip("h5py")
+import h5py
 
 ALF_DIR = Path(__file__).resolve().parent.parent
 ALF_BIN = ALF_DIR / "Prog" / "ALF.out"
 START_DIR = ALF_DIR / "Scripts_and_Parameters_files" / "Start"
 
-pytestmark = pytest.mark.skipif(
-    not ALF_BIN.exists(), reason=f"{ALF_BIN} not built; run `make program` first"
-)
-
-# Shrunk from Start's 6x6 with time-displaced measurements: a bin then costs
-# milliseconds, so a bin-bounded run finishes fast and a time-bounded one still
-# produces plenty of bins.
 SMALL = {
     "VAR_lattice": {"L1": 4, "L2": 4},
     "VAR_QMC": {"NSweep": 20, "Ltau": 0},
 }
 
 
-def _rewrite_parameters(path, overrides):
-    """Rewrite ``key = value`` lines of *path*, per namelist.
-
-    Scoping by namelist matters: several keys (``Beta`` for one) appear in more
-    than one, and only the QMC namelist's copy should move.
-    """
+def rewrite_parameters(path, overrides):
+    """Rewrite ``key = value`` lines of path, per namelist."""
     namelist = None
     out = []
+
     for line in path.read_text().splitlines():
         stripped = line.strip()
         if stripped.startswith("&"):
@@ -65,59 +50,75 @@ def _rewrite_parameters(path, overrides):
     path.write_text("\n".join(out) + "\n")
 
 
-def _run_alf(tmp_path, nbin, cpu_max):
-    """Run ALF once in *tmp_path* and return the bins it wrote."""
-    run_dir = tmp_path / "run"
+def run_alf(run_dir, nbin, cpu_max):
+    """Run ALF once in run_dir and return the bins in data.h5."""
     if not run_dir.exists():
         shutil.copytree(START_DIR, run_dir)
-    overrides = {
-        "VAR_lattice": dict(SMALL["VAR_lattice"]),
-        "VAR_QMC": {**SMALL["VAR_QMC"], "NBin": nbin, "CPU_MAX": f"{cpu_max}d0"},
-    }
-    _rewrite_parameters(run_dir / "parameters", overrides)
-
-    env = os.environ.copy()
-    env["OMP_NUM_THREADS"] = "1"
-    subprocess.run([str(ALF_BIN)], cwd=run_dir, env=env, check=True, timeout=900)
-
+    rewrite_parameters(
+        run_dir / "parameters",
+        {
+            "VAR_lattice": dict(SMALL["VAR_lattice"]),
+            "VAR_QMC": {**SMALL["VAR_QMC"], "NBin": nbin, "CPU_MAX": f"{cpu_max}d0"},
+        },
+    )
+    subprocess.run([str(ALF_BIN)], cwd=run_dir, check=True, timeout=900)
     with h5py.File(run_dir / "data.h5", "r") as f:
-        return int(f["Ener_scal/obser"].shape[0])
+        return int(f["Ener_scal/obser"].shape[0])  # just use energy for bin count
 
 
-def test_bin_bound_wins_when_it_is_reached_first(tmp_path):
-    """A reachable NBin must be honoured exactly, not overshot.
-
-    The time budget here is far larger than the work, so without the fix ALF
-    would run the full CPU_MAX and produce many more bins than asked for.
-    """
-    assert _run_alf(tmp_path, nbin=20, cpu_max=1.0) == 20
+def check(name, ok, detail):
+    print(f"{'PASS' if ok else 'FAIL'}  {name}: {detail}")
+    return ok
 
 
-def test_time_bound_still_applies_when_bins_are_out_of_reach(tmp_path):
-    """A tiny budget must still truncate cleanly, well short of NBin.
+def main():
+    # check binary
+    if not ALF_BIN.exists():
+        sys.exit(f"{ALF_BIN} not built; run `make program` first")
 
-    This is the graceful-stop path a checkpoint restart depends on: ALF breaks
-    the bin loop on time, having already flushed the bins it completed.
-    """
-    bins = _run_alf(tmp_path, nbin=1_000_000, cpu_max=0.003)
-    assert 0 < bins < 1_000_000
+    results = []
+    with tempfile.TemporaryDirectory() as tmp:
+        tmp = Path(tmp)
+
+        # A reachable NBin must be honoured exactly. The time budget here is far
+        # larger than the work, so an implementation that lets CPU_MAX discard
+        # NBin runs the full budget and overshoots.
+        bins = run_alf(tmp / "bin_bound", nbin=20, cpu_max=0.05)
+        results.append(check("bin bound honoured", bins == 20, f"{bins} bins, want 20"))
+
+        # A tiny budget must truncate cleanly, well short of NBin. This is the
+        # graceful stop a checkpoint restart depends on, for example.
+        bins = run_alf(tmp / "time_bound", nbin=1_000_000, cpu_max=0.003)
+        results.append(
+            check("time bound truncates", 0 < bins < 1_000_000, f"{bins} bins")
+        )
+
+        # NBin <= 0 leaves the run bounded by time alone.
+        bins = run_alf(tmp / "no_bin_bound", nbin=0, cpu_max=0.003)
+        results.append(check("NBin <= 0 is time-bounded", bins > 0, f"{bins} bins"))
+
+        # NBin bounds this run alone; data.h5 accumulates across restarts.
+        restart = tmp / "restart"
+        bins = run_alf(restart, nbin=10, cpu_max=0.05)
+        results.append(check("restart, first leg", bins == 10, f"{bins} bins, want 10"))
+
+        # confout -> confin rename
+        promoted = list(restart.glob("confout_*"))
+        if not promoted:
+            sys.exit("no checkpoint to promote")
+        for conf in promoted:
+            conf.rename(restart / f"confin_{conf.name[len('confout_') :]}")
+        bins = run_alf(restart, nbin=5, cpu_max=0.05)
+
+        # Check that we get the right total after the restart run
+        results.append(
+            check("restart, second leg", bins == 15, f"{bins} bins, want 15")
+        )
+
+    if not all(results):
+        sys.exit(1)
+    print(f"{len(results)} tests passed")
 
 
-def test_no_bin_bound_is_pure_time_bounding(tmp_path):
-    """NBin <= 0 keeps upstream's behaviour: run for the whole budget."""
-    assert _run_alf(tmp_path, nbin=0, cpu_max=0.003) > 0
-
-
-def test_bins_accumulate_across_a_restart(tmp_path):
-    """Resuming appends to data.h5, so the bin bound counts this run's bins.
-
-    That is what makes ``NBin = target - bins_on_disk`` land exactly on target.
-    """
-    assert _run_alf(tmp_path, nbin=10, cpu_max=1.0) == 10
-
-    # Promote the checkpoint the way a restart does.
-    run_dir = tmp_path / "run"
-    for conf in run_dir.glob("confout_*"):
-        conf.rename(run_dir / f"confin_{conf.name[len('confout_'):]}")
-
-    assert _run_alf(tmp_path, nbin=5, cpu_max=1.0) == 15
+if __name__ == "__main__":
+    main()
