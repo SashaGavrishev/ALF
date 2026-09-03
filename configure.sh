@@ -1051,6 +1051,17 @@ if [ "${HDF5_ENABLED}" = "1" ]; then
   ALF_FLAGS_ANA="${ALF_FLAGS_ANA} ${INC_HDF5} -DHDF5 -DHDF5_ZLIB"
   ALF_FLAGS_PROG="${ALF_FLAGS_PROG} -DHDF5 -DHDF5_ZLIB"
 fi
+# This fork's measurement instrumentation. Compiled in by default, then gated at
+# run time by ALF_INSTRUMENT; the macro exists because the near-tie hoist in
+# upgrade_mod rewrites the accept/reject line, which no runtime test can undo.
+# ALF_NO_INSTRUMENT=1 removes it, and that build must match stock ALF bitwise --
+# which is the cheapest regression test there is at an upstream merge.
+if [ "${ALF_NO_INSTRUMENT:-0}" = "1" ]; then
+  printf "\n${GREEN}Instrumentation compiled out (ALF_NO_INSTRUMENT=1)${NC}\n"
+else
+  ALF_FLAGS_PROG="${ALF_FLAGS_PROG} -DALF_INSTRUMENT"
+fi
+
 export ALF_FLAGS_QRREF
 export ALF_FLAGS_MODULES
 export ALF_FLAGS_ANA

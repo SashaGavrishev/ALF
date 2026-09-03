@@ -1,7 +1,7 @@
 .PHONY : Compile tidy clean program
 
 # Source files (single source of truth; OBJS and MODS are generated into DEPSFILE)
-SRCS = Hamiltonians/LRC_mod.F90 control_mod.F90 Fields_mod.F90 Operator_mod.F90 WaveFunction_mod.F90 observables_mod.F90 \
+SRCS = Hamiltonians/LRC_mod.F90 instrument_mod.F90 control_mod.F90 Fields_mod.F90 Operator_mod.F90 WaveFunction_mod.F90 observables_mod.F90 \
 	ContainerElementBase_mod.F90 DynamicMatrixArray_mod.F90 OpTTypes_mod.F90 OpT_time_dependent.F90 \
 	Hamiltonian_main_mod.F90 QDRP_decompose_mod.F90 udv_state_mod.F90 Hop_mod.F90 UDV_WRAP_mod.F90 \
 	Predefined_Int_mod.F90 Predefined_Obs_mod.F90 Predefined_Latt_mod.F90 Predefined_Hop_mod.F90 Predefined_Trial_mod.F90 \

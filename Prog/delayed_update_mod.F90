@@ -64,7 +64,9 @@
 !> and pay Ndim**2 only once every k accepted flips, through a level-3 LAPACK
 !> operation, ZGEMM. Traffic per accepted flip is then expected to fall
 !> from ~2*Ndim**2 to ~2*d*Ndim*k + 2*Ndim**2/k. The matrices X and Y are
-!> referred to as "panels".
+!> referred to as "panels". The scheme, including its generalisation to vertices
+!> of rank d > 1, follows F. Sun and X. Y. Xu, Phys. Rev. B 109, 235140 (2024);
+!> see the "Delayed (rank-k) updates" section of the ALF documentation.
 !>
 !> The implementation is such that a Green's function is in its "factorised"
 !> form only within a single time slice; thus stabilisation, measurement and
@@ -85,7 +87,7 @@ module delayed_update_mod
    implicit none
 
    private
-   public :: delay_alloc, delay_dealloc, delay_depth
+   public :: delay_alloc, delay_dealloc, delay_depth, delay_set_depth
    public :: delay_assert_inactive, delay_open, delay_close
    public :: delay_block, delay_row, delay_col, delay_append, delay_flush
    public :: delay_wrap, delay_pending, delay_log
@@ -118,6 +120,10 @@ module delayed_update_mod
 
    ! The resolved "auto" depth, cached.
    integer, private, save :: k_resolved = 0
+
+   ! Set when the caller has imposed a depth through delay_set_depth, which
+   ! then stands in for whatever ALF_DELAY_K would have resolved to here.
+   logical, private, save :: depth_imposed = .false.
 
    ! How the depth in force was arrived at, for the info file: off, fixed,
    ! probe or formula. Protected rather than behind an accessor, since
@@ -191,8 +197,12 @@ contains
 !> auxiliary field configurations should remain equivalent nevertheless across
 !> different k.
 !>
-!> The choice of a "clamp" [8, 256] is in principle somewhat arbitrary, but
-!> seemed to perform well in benchmarks in a typical use case.
+!> The clamp [8, 256] bounds what "auto" and "formula" may return. Its purpose
+!> is to keep the resolved depth inside the range the delayed path has been
+!> exercised over, rather than to express an optimum: below the floor the flush
+!> is too frequent to amortise, and above the ceiling the panel reconstructions
+!> dominate. A depth given explicitly as an integer is used verbatim and is not
+!> clamped.
 !>
 !> Delay depth is deliberately not configured as a simulation parameter in order
 !> avoid add spurious additional information at the data analysis stage, since
@@ -208,6 +218,13 @@ contains
       character (Len=32) :: word   ! the same, trimmed, as matched below
       integer :: length, status    ! from get_environment_variable
       integer :: value             ! the depth, where the request was a number
+
+      ! A depth imposed from outside stands: under MPI one rank resolves and
+      ! hands the answer to the others, which must not re-read or re-measure.
+      if (depth_imposed) then
+         delay_depth = k_resolved
+         return
+      endif
 
       if (k_request == K_UNREAD) then
          k_request = 0
@@ -250,6 +267,31 @@ contains
          if (k_request > 0) delay_source = 'fixed'
       end select
    end function delay_depth
+
+!-------------------------------------------------------------------------------
+!> @brief
+!> Impose a depth from outside, in place of reading ALF_DELAY_K here.
+!>
+!> @details
+!> "auto" resolves the depth by timing, and under MPI that timing has to be
+!> taken on one rank alone: delay_probe holds an Ndim**2 scratch, so a fully
+!> occupied node would carry one per rank, and ranks measuring at once contend
+!> for the very memory system they are measuring. Wrapgr_delay_alloc therefore
+!> has one rank resolve the depth and broadcasts it. The module itself stays
+!> free of MPI.
+!>
+!> Must be called before delay_alloc. Any later delay_depth returns k verbatim.
+!-------------------------------------------------------------------------------
+
+   subroutine delay_set_depth(k, source)
+      implicit none
+      integer, intent(in) :: k                ! the depth to use, 0 for off
+      character (Len=*), intent(in) :: source ! how it was arrived at, as
+      !                                         delay_source records it
+      depth_imposed = .true.
+      k_resolved    = k
+      delay_source  = source
+   end subroutine delay_set_depth
 
 !-------------------------------------------------------------------------------
 !> @brief
@@ -326,8 +368,8 @@ contains
    integer function delay_formula(Ndim)
       implicit none
       integer, intent(in) :: Ndim
-      ! Clamped to a range validated from benchmarks, and never wider than the
-      ! actual matrix.
+      ! Clamped to the range the delayed path has been exercised over, and never
+      ! wider than the actual matrix.
       delay_formula = min(K_CEILING, max(1, Ndim), &
       &                   max(K_FLOOR, nint(sqrt(2.d0*real(Ndim, Kind(0.d0))))))
    end function delay_formula
@@ -578,8 +620,17 @@ contains
       if (allocated(xp)) deallocate (xp)
       if (allocated(yp)) deallocate (yp)
       if (allocated(ncol)) deallocate (ncol)
-      kmax   = 0
-      delay_active = .false.
+      ! Back to the state delay_alloc found, so that a second allocation cannot
+      ! inherit the shape of the first. The parsed ALF_DELAY_K is left cached:
+      ! it describes the request, not the allocation.
+      kmax          = 0
+      panel_w       = 0
+      ndim_s        = 0
+      nfl_s         = 0
+      k_resolved    = 0
+      depth_imposed = .false.
+      delay_source  = 'off'
+      delay_active  = .false.
    end subroutine delay_dealloc
 
 !-------------------------------------------------------------------------------

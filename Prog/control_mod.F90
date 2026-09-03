@@ -48,6 +48,7 @@ module Control
     use files_mod
     Use MyMats
     use iso_fortran_env, only: output_unit, error_unit
+    use Instrument_mod, only: instrument_on
     Implicit none
 
     real    (Kind=Kind(0.d0)), private, save :: XMEANG, XMAXG, XMAXP,  Xmean_tau, Xmax_tau
@@ -94,7 +95,6 @@ module Control
     ! Rank-local like the other counts; a sum across ranks beside a mean would
     ! reconstruct nothing.
     Integer (Kind=Kind(0.d0)), private, save :: NC_near_tie
-
     ! Delay depth in force, 0 when the delayed update is off. Recorded because
     ! ALF_DELAY_K is an environment variable rather than a parameter, and a knob
     ! that changes the arithmetic must leave a trace in the run record.
@@ -102,12 +102,10 @@ module Control
 
     ! How that depth was arrived at: fixed by ALF_DELAY_K, measured by the probe
     ! "auto" runs, or the closed form the probe falls back to. Reported on its own
-    ! line rather than folded into the depth, both because update_share.py parses
-    ! that one and because the fallback is the failure worth seeing -- a probe
-    ! that quietly fell back on every chain is a probe that is not running, and a
-    ! depth alone cannot show it.
+    ! line rather than folded into the depth, because the fallback is the failure
+    ! worth seeing -- a probe that quietly fell back on every chain is a probe
+    ! that is not running, and a depth alone cannot show it.
     Character (Len=16), private, save :: Delay_depth_from = 'off'
-
     Integer (Kind=kind(0.d0)),  private, save :: NC_Glob_up, ACC_Glob_up
     Integer (Kind=kind(0.d0)),  private, save :: NC_HMC_up, ACC_HMC_up
     Integer (Kind=kind(0.d0)),  private, save :: NC_Temp_up, ACC_Temp_up
@@ -163,6 +161,7 @@ module Control
         
         NC_Temp_up   = 0
         ACC_Temp_up  = 0
+
 
         Time_update     = 0.d0
         NC_update       = 0
@@ -488,10 +487,10 @@ module Control
 
         Character (len=64) :: file1
         Real (Kind=Kind(0.d0)) :: Time, Acc, Acc_eff, Acc_Glob, Acc_Temp, size_clust_Glob, size_clust_Glob_ACC, Acc_HMC
-        Real (Kind=Kind(0.d0)) :: Update_time, Update_share
-        Real (Kind=Kind(0.d0)) :: Hop_time, Hop_share
+        Real (Kind=Kind(0.d0)) :: Update_time, Update_share, Hop_time, Hop_share
 #ifdef MPI
         REAL (Kind=Kind(0.d0))  :: X
+        Integer        :: Ierr, Isize, Irank, irank_g, isize_g, igroup
 
         CALL MPI_COMM_SIZE(MPI_COMM_WORLD,ISIZE,IERR)
         CALL MPI_COMM_RANK(MPI_COMM_WORLD,IRANK,IERR)
@@ -545,6 +544,7 @@ module Control
            Hop_time = Time_hop * dble(NC_hop)/dble(NC_hop_timed)
            if (Time > 0.d0) Hop_share = Hop_time/Time
         endif
+
         If (str_to_upper(Global_update_scheme) == "LANGEVIN") Force_mean =  Force_mean/real(Force_count,kind(0.d0)) 
         
 #if defined(MPI)
@@ -561,22 +561,6 @@ module Control
         X = 0.d0
         CALL MPI_REDUCE(ACC_eff,X,1,MPI_REAL8,MPI_SUM, 0,Group_Comm,IERR)
         ACC_eff = X/dble(Isize_g)
-        ! Means, as for Time and the acceptances: every rank does the same
-        ! amount of this work, so a mean describes any one of them. The counts
-        ! stay rank-local, since a summed count beside a mean time would not
-        ! reconstruct anything.
-        X = 0.d0
-        CALL MPI_REDUCE(Update_time,X,1,MPI_REAL8,MPI_SUM, 0,Group_Comm,IERR)
-        Update_time = X/dble(Isize_g)
-        X = 0.d0
-        CALL MPI_REDUCE(Update_share,X,1,MPI_REAL8,MPI_SUM, 0,Group_Comm,IERR)
-        Update_share = X/dble(Isize_g)
-        X = 0.d0
-        CALL MPI_REDUCE(Hop_time,X,1,MPI_REAL8,MPI_SUM, 0,Group_Comm,IERR)
-        Hop_time = X/dble(Isize_g)
-        X = 0.d0
-        CALL MPI_REDUCE(Hop_share,X,1,MPI_REAL8,MPI_SUM, 0,Group_Comm,IERR)
-        Hop_share = X/dble(Isize_g)
         X = 0.d0
         CALL MPI_REDUCE(ACC_Glob,X,1,MPI_REAL8,MPI_SUM, 0,Group_Comm,IERR)
         ACC_Glob = X/dble(Isize_g)
@@ -652,6 +636,10 @@ module Control
            If ( NC_eff_up > 0 ) then
               Write(50,*) ' Effective Acceptance       : ', ACC_eff
            Endif
+           ! Always written, including the 0 of a run with the delay off: a
+           ! missing line and a line reading 0 are the same fact, but only the
+           ! second one distinguishes an old binary from a new one running
+           ! immediate updates.
            If ( NC_update_timed > 0 ) then
               Write(50,*) ' Green updates              : ', NC_update
               Write(50,*) ' Green update time          : ', Update_time
@@ -663,16 +651,22 @@ module Control
               Write(50,*) ' Hopping time               : ', Hop_time
               Write(50,*) ' Hopping share              : ', Hop_share
            Endif
-           ! Always written, including the 0 of a run with the delay off: a
-           ! missing line and a line reading 0 are the same fact, but only the
-           ! second one distinguishes an old binary from a new one running
-           ! immediate updates.
            Write(50,*) ' Delay depth                : ', Delay_depth_used
            Write(50,*) ' Delay depth from           : ', Trim(Delay_depth_from)
+#ifdef ALF_INSTRUMENT
            ! Interprets a divergence between two builds as reassociation rather
            ! than as a bug: a proposal within rounding of its threshold can be
            ! decided either way by a last-bit difference.
-           Write(50,*) ' Metropolis near ties       : ', NC_near_tie
+           !
+           ! Two gates, and they are not redundant. The macro decides whether the
+           ! hoist that feeds this counter exists at all, which is what governs
+           ! bitwise agreement with a stock build. instrument_on decides whether
+           ! the run reports it: with the macro compiled in but ALF_INSTRUMENT
+           ! unset the count is real, but a stock build must add nothing to info.
+           if (instrument_on()) &
+                Write(50,*) ' Metropolis near ties       : ', NC_near_tie
+#endif
+
 #if defined(TEMPERING)
            Write(50,*) ' Acceptance Tempering       : ', ACC_Temp
 #endif

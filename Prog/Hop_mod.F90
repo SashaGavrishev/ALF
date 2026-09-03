@@ -49,6 +49,7 @@
 
       Use Hamiltonian_main
       Use Operator_mod
+      Use Instrument_mod, only: instrument_on, instrument_env
       Use Random_wrap
       Use DynamicMatrixArray_mod
       Use ContainerElementBase_mod
@@ -165,19 +166,14 @@
 
 !--------------------------------------------------------------------
 !> @brief
-!> Whether the hopping propagator is timed, read once from ALF_HOP_TIMER.
+!> Whether the hopping propagator is timed. Off unless ALF_INSTRUMENT is
+!> on; ALF_HOP_TIMER=0 then disables it independently.
 !--------------------------------------------------------------------
         Logical function hop_timing()
           Implicit none
-          character(len=32) :: text
-          integer :: length, status, value
           if (hop_timer < 0) then
-             hop_timer = 1
-             call get_environment_variable("ALF_HOP_TIMER", text, length, status)
-             if (status == 0 .and. length > 0) then
-                read (text(1:length), *, iostat=status) value
-                if (status == 0 .and. value == 0) hop_timer = 0
-             endif
+             hop_timer = 0
+             if (instrument_on()) hop_timer = instrument_env("ALF_HOP_TIMER", 1, 0)
           endif
           hop_timing = hop_timer > 0
         end function hop_timing

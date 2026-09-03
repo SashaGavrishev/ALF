@@ -32,6 +32,7 @@
 
 module upgrade_mod
    use runtime_error_mod
+   use Instrument_mod, only: instrument_on, instrument_env
    implicit none
 
    ! Sampling for the Green's-function update timer (see Control_update).
@@ -43,38 +44,31 @@ module upgrade_mod
    ! while still accumulating thousands of samples per bin.
    !
    ! Prime, so the sample does not alias with the per-slice operator count and
-   ! keep landing at the same point in the sweep. Precisely: the sampled
-   ! positions are equidistributed over a period P only when gcd(61, P) = 1, so
-   ! primality buys this for every P that is not a multiple of 61 rather than
-   ! for every P -- an L1*L2 or 3*Ndim of 61, 122, ... would still alias. No
-   ! lattice in either grid is one, and the accept/reject draw decorrelates it
+   ! keep landing at the same point in the sweep: the sampled positions are
+   ! equidistributed over a period P only when gcd(61, P) = 1. No lattice in
+   ! either grid is a multiple of 61, and the accept/reject draw decorrelates it
    ! further. ALF_UPDATE_SAMPLE overrides it: 1 times every update, which is the
    ! cross-check that the sampling is unbiased, and 0 disables the timing.
    integer, parameter, private :: UPDATE_SAMPLE_DEFAULT = 61
    integer, private, save :: update_sample = -1
-   ! 64-bit: a model with a few thousand vertices per slice passes 2**31
-   ! accepted updates over a long production segment, and a default integer
-   ! would overflow. Signed overflow is undefined, and this compiler is already
-   ! known to constant-fold wrap-dependent arithmetic at -O3.
+   ! 64-bit: a model with a few thousand vertices per slice passes 2**31 accepted
+   ! updates over a long production segment, and a default integer would
+   ! overflow. Signed overflow is undefined, and this compiler is already known
+   ! to constant-fold wrap-dependent arithmetic at -O3.
    Integer (Kind=Kind(0.d0)), private, save :: update_calls = 0
 
    contains
 
 !--------------------------------------------------------------------
 !> @brief
-!> Sampling stride for the update timer, read once from ALF_UPDATE_SAMPLE.
+!> Sampling stride for the update timer. Zero unless ALF_INSTRUMENT is on.
 !--------------------------------------------------------------------
    integer function update_sample_stride()
       implicit none
-      character(len=32) :: text
-      integer :: length, status, value
       if (update_sample < 0) then
-         update_sample = UPDATE_SAMPLE_DEFAULT
-         call get_environment_variable("ALF_UPDATE_SAMPLE", text, length, status)
-         if (status == 0 .and. length > 0) then
-            read (text(1:length), *, iostat=status) value
-            if (status == 0 .and. value >= 0) update_sample = value
-         endif
+         update_sample = 0
+         if (instrument_on()) &
+              update_sample = instrument_env("ALF_UPDATE_SAMPLE", UPDATE_SAMPLE_DEFAULT, 0)
       endif
       update_sample_stride = update_sample
    end function update_sample_stride
@@ -174,22 +168,27 @@ module upgrade_mod
         Integer ::  n,m,nf, nf_eff, i, Op_dim, op_dim_nf
         Complex (Kind=Kind(0.d0)) :: Z, D_Mat, myexp, s1, s2
 
-        Real    (Kind=Kind(0.d0)) :: Weight, tmp_r
-        Complex (Kind=Kind(0.d0)) :: alpha, beta, g_loc
-        Complex (Kind=Kind(0.d0)), Dimension(:, :), Allocatable :: Mat, Delta
-        ! Reconstructed views of the current Green's function, used only when a
-        ! factored region is open; see delayed_update_mod.
-        Complex (Kind=Kind(0.d0)), Dimension(:, :), Allocatable :: Gblk, g_rows, g_cols
-        Complex (Kind=Kind(0.d0)), Dimension(:, :), Allocatable :: u, v
-        Complex (Kind=Kind(0.d0)), Dimension(:, :), Allocatable :: y_v, xp_v
-        Complex (Kind=Kind(0.d0)), Dimension(:, :), Allocatable :: x_v
-        Complex (Kind=Kind(0.D0)), Dimension(:, :), Allocatable :: Zarr, grarr
-        Complex (Kind=Kind(0.D0)), Dimension(:), Allocatable :: sxv, syu
-
+        Real    (Kind=Kind(0.d0)) :: Weight
+#ifdef ALF_INSTRUMENT
+        Real    (Kind=Kind(0.d0)) :: tmp_r
+#endif
         ! Update timer; see UPDATE_SAMPLE_DEFAULT.
         Logical :: update_timed
         Integer :: update_stride
         Integer (Kind=Kind(0.d0)) :: update_c0, update_c1, update_rate
+        Complex (Kind=Kind(0.d0)) :: alpha, beta, g_loc
+        Complex (Kind=Kind(0.d0)), Dimension(:, :), Allocatable :: Mat, Delta
+        ! Views of the current Green's function on the operator's support: the
+        ! d x d block, d rows and d columns. Within a factorised region these are
+        ! reconstructed from the stale matrix plus the panels, otherwise they come
+        ! straight off GR; either way everything below reads them and not GR, so
+        ! the two schemes share one code path. See delayed_update_mod.
+        Complex (Kind=Kind(0.d0)), Dimension(:, :), Allocatable :: Gblk, g_rows, g_cols
+        Complex (Kind=Kind(0.d0)), Dimension(:, :), Allocatable :: u, v
+        Complex (Kind=Kind(0.d0)), Dimension(:, :), Allocatable :: y_v, xp_v
+        Complex (Kind=Kind(0.d0)), Dimension(:, :), Allocatable :: x_v
+        Complex (Kind=Kind(0.D0)), Dimension(:, :), Allocatable :: Zarr
+        Complex (Kind=Kind(0.D0)), Dimension(:), Allocatable :: sxv, syu
 
         toggle = .false.
         ! if ( abs(OP_V(n_op,1)%g) < 1.D-12 )   return
@@ -205,7 +204,7 @@ module upgrade_mod
         if (op_dim > 0) then
            Allocate ( Mat(Op_dim,Op_Dim), Delta(Op_dim,N_FL_eff), u(Ndim,Op_dim), v(Ndim,Op_dim) )
            Allocate ( y_v(Ndim,Op_dim), xp_v(Ndim,Op_dim), x_v(Ndim,Op_dim) )
-           if (delay_active) Allocate ( Gblk(Op_dim,Op_dim), g_rows(Ndim,Op_dim), g_cols(Ndim,Op_dim) )
+           Allocate ( Gblk(Op_dim,Op_dim), g_rows(Ndim,Op_dim), g_cols(Ndim,Op_dim) )
         endif
 
         ! Compute the ratio
@@ -219,31 +218,28 @@ module upgrade_mod
            if (op_v(n_op,nf)%get_g_t_alloc()) g_loc = Op_V(n_op,nf)%g_t(nt)
            Z1 = g_loc * ( nsigma_new%Phi(1,1) -  nsigma%Phi(n_op,nt) )
            op_dim_nf = Op_V(n_op,nf)%N_non_zero
-           if (delay_active .and. op_dim_nf > 0) then
-              ! Same arithmetic against the current Green's function, which under
-              ! the delay is the stale matrix plus the panels. O(d**2*k), and paid
-              ! on rejected proposals too -- the cost the delay adds.
-              call delay_block(nf, GR, Op_V(n_op,nf)%P, op_dim_nf, Gblk, Op_dim)
-              Do m = 1,op_dim_nf
-                 myexp = exp( Z1* Op_V(n_op,nf)%E(m) )
-                 Z = myexp - 1.d0
-                 Delta(m,nf_eff) = Z
-                 do n = 1,op_dim_nf
-                    Mat(n,m) = - Z * Gblk(n,m)
+           if (op_dim_nf > 0) then
+              if (delay_active) then
+                 ! Reading the block off the panels is O(d**2*k) and is paid on
+                 ! rejected proposals too -- the cost the delay adds.
+                 call delay_block(nf, GR, Op_V(n_op,nf)%P, op_dim_nf, Gblk, Op_dim)
+              else
+                 Do m = 1,op_dim_nf
+                    do n = 1,op_dim_nf
+                       Gblk(n,m) = GR( Op_V(n_op,nf)%P(n), Op_V(n_op,nf)%P(m), nf )
+                    Enddo
                  Enddo
-                 Mat(m,m) = myexp + Mat(m,m)
-              Enddo
-           else
+              endif
+           endif
            Do m = 1,op_dim_nf
               myexp = exp( Z1* Op_V(n_op,nf)%E(m) )
               Z = myexp - 1.d0
               Delta(m,nf_eff) = Z
               do n = 1,op_dim_nf
-                 Mat(n,m) = - Z * GR( Op_V(n_op,nf)%P(n), Op_V(n_op,nf)%P(m),nf )
+                 Mat(n,m) = - Z * Gblk(n,m)
               Enddo
               Mat(m,m) = myexp + Mat(m,m)
            Enddo
-           endif
            If (op_dim_nf == 0 ) then
               D_mat = 1.0d0
            elseIf (op_dim_nf == 1 ) then
@@ -289,9 +285,9 @@ module upgrade_mod
         endif
 
         toggle = .false.
-        ! Hoisted out of the comparison so the draw can be counted as well as
-        ! used. One call either way, so the RNG stream and the decision are
-        ! unchanged as against the pre-delay statement it replaces.
+#ifdef ALF_INSTRUMENT
+        ! One call either way, so the RNG stream and the decision are unchanged
+        ! as against the stock statement this replaces.
         tmp_r = ranf_wrap()
         ! A decision this close to its threshold can be flipped by a last-bit
         ! difference, which is what a delayed update introduces. In Intermediate
@@ -299,6 +295,9 @@ module upgrade_mod
         ! since that mode accepts by construction and takes no decision.
         if ( abs(Weight - tmp_r) < 1.d-12 )  Call Control_near_tie()
         if ( Weight > tmp_r )  Then
+#else
+        if ( Weight > ranf_wrap() )  Then
+#endif
            toggle = .true.
            If ( str_to_upper(mode) == "FINAL"  )  Phase = Phase * Ratiotot/sqrt(Ratiotot*conjg(Ratiotot))
            !Write(6,*) 'Accepted : ', Ratiotot
@@ -323,29 +322,27 @@ module upgrade_mod
                 beta = 0.D0
                 call zlaset('N', Ndim, op_dim_nf, beta, beta, u, size(u, 1))
                 call zlaset('N', Ndim, op_dim_nf, beta, beta, v, size(v, 1))
+                ! v is the only place GR's rows enter, and the Woodbury chain
+                ! below reads nothing but u, v, x_v and y_v. So taking the rows
+                ! here makes every later quantity current -- including Zarr, which
+                ! is built from x_v and therefore needs no separate block
+                ! correction of its own.
                 if (delay_active) then
-                    ! v is the only place GR's rows enter, and the Woodbury chain
-                    ! below reads nothing but u, v, x_v and y_v. So reconstructing
-                    ! the rows here makes every later quantity current -- including
-                    ! Zarr, which is built from x_v and therefore needs no separate
-                    ! block correction of its own.
                     call delay_row(nf, GR, Op_V(n_op,nf)%P, op_dim_nf, g_rows)
-                    do n = 1,op_dim_nf
-                        u( Op_V(n_op,nf)%P(n), n) = Delta(n,nf_eff)
-                        do i = 1,Ndim
-                            v(i,n) = - g_rows(i,n)
-                        enddo
-                        v(Op_V(n_op,nf)%P(n), n) = 1.d0 - g_rows(Op_V(n_op,nf)%P(n), n)
-                    enddo
                 else
+                    do n = 1,op_dim_nf
+                        do i = 1,Ndim
+                            g_rows(i,n) = GR( Op_V(n_op,nf)%P(n), i, nf )
+                        enddo
+                    enddo
+                endif
                 do n = 1,op_dim_nf
                     u( Op_V(n_op,nf)%P(n), n) = Delta(n,nf_eff)
                     do i = 1,Ndim
-                        v(i,n) = - GR( Op_V(n_op,nf)%P(n), i, nf )
+                        v(i,n) = - g_rows(i,n)
                     enddo
-                    v(Op_V(n_op,nf)%P(n), n)  = 1.d0 - GR( Op_V(n_op,nf)%P(n),  Op_V(n_op,nf)%P(n), nf)
+                    v(Op_V(n_op,nf)%P(n), n) = 1.d0 + v(Op_V(n_op,nf)%P(n), n)
                 enddo
-                endif
 
                 call zlaset('N', Ndim, op_dim_nf, beta, beta, x_v, size(x_v, 1))
                 call zlaset('N', Ndim, op_dim_nf, beta, beta, y_v, size(y_v, 1))
@@ -370,41 +367,37 @@ module upgrade_mod
                     call zscal(Ndim, Z, x_v(1, n), 1)
                     Deallocate(syu, sxv)
                 enddo
+                ! The update is  G <- G - xp_v * y_v^T. The columns of G it is
+                ! built from come from delay_col for the same reason the rows did,
+                ! and the result is then appended to the panels rather than applied
+                ! to the matrix -- delay_append folds the coefficient into X, so
+                ! the flush stays a plain X*Y^T.
                 IF (delay_active) THEN
-                    ! Same rank-d update, appended to the panels instead of applied
-                    ! to the matrix. The columns come from delay_col for the same
-                    ! reason the rows did; the coefficient is folded into X inside
-                    ! delay_append so the flush stays a plain X*Y^T.
                     call delay_col(nf, GR, Op_V(n_op,nf)%P, op_dim_nf, g_cols)
-                    IF (op_dim_nf == 1) THEN
-                        Z = -x_v(Op_V(n_op,nf)%P(1), 1)
+                ELSE
+                    g_cols(:,1:op_dim_nf) = gr(:, Op_V(n_op,nf)%P(1:op_dim_nf), nf)
+                ENDIF
+                IF (size(Op_V(n_op,nf)%P, 1) == 1) THEN
+                    Z = -x_v(Op_V(n_op,nf)%P(1), 1)
+                    IF (delay_active) THEN
                         call delay_append(nf, Z, g_cols, y_v, 1, GR)
                     ELSE
-                        Allocate (zarr(op_dim_nf, op_dim_nf))
-                        Zarr = x_v(Op_V(n_op,nf)%P(1:op_dim_nf), :)
-                        beta  = 0.d0
-                        alpha = 1.D0
-                        CALL ZGEMM('N', 'N', NDim, op_dim_nf, op_dim_nf, alpha, g_cols, Ndim, &
-                             &     Zarr, op_dim_nf, beta, xp_v, Ndim)
-                        Deallocate(Zarr)
-                        alpha = -1.D0
-                        call delay_append(nf, alpha, xp_v, y_v, op_dim_nf, GR)
+                        CALL ZGERU(Ndim, Ndim, Z, g_cols(1,1), 1, y_v(1, 1), 1, gr(1,1,nf), Ndim)
                     ENDIF
-                ELSEIF (size(Op_V(n_op,nf)%P, 1) == 1) THEN
-                    CALL ZCOPY(Ndim, gr(1, Op_V(n_op,nf)%P(1), nf), 1, xp_v(1, 1), 1)
-                    Z = -x_v(Op_V(n_op,nf)%P(1), 1)
-                    CALL ZGERU(Ndim, Ndim, Z, xp_v(1,1), 1, y_v(1, 1), 1, gr(1,1,nf), Ndim)
                 ELSE
-                    Allocate (zarr(op_dim_nf, op_dim_nf), grarr(NDim, op_dim_nf))
-                    Zarr = x_v(Op_V(n_op,nf)%P(1:op_dim_nf), :)
-                    grarr = gr(:, Op_V(n_op,nf)%P(1:op_dim_nf), nf)
+                    Allocate (zarr(op_dim_nf, op_dim_nf))
+                    Zarr = x_v(Op_V(n_op,nf)%P(1:op_dim_nf), 1:op_dim_nf)
                     beta  = 0.d0
                     alpha = 1.D0
-                    CALL ZGEMM('N', 'N', NDim, op_dim_nf, op_dim_nf, alpha, grarr, Ndim, Zarr, op_dim_nf, beta, xp_v, Ndim)
-                    Deallocate(Zarr, grarr)
-                    beta  = cmplx ( 1.0d0, 0.0d0, kind(0.D0))
+                    CALL ZGEMM('N', 'N', NDim, op_dim_nf, op_dim_nf, alpha, g_cols, Ndim, Zarr, op_dim_nf, beta, xp_v, Ndim)
+                    Deallocate(Zarr)
                     alpha = -1.D0
-                    CALL ZGEMM('N','T',Ndim,Ndim,op_dim_nf,alpha,xp_v, Ndim, y_v, Ndim,beta,gr(1,1,nf), Ndim)
+                    IF (delay_active) THEN
+                        call delay_append(nf, alpha, xp_v, y_v, op_dim_nf, GR)
+                    ELSE
+                        beta  = cmplx ( 1.0d0, 0.0d0, kind(0.D0))
+                        CALL ZGEMM('N','T',Ndim,Ndim,op_dim_nf,alpha,xp_v, Ndim, y_v, Ndim,beta,gr(1,1,nf), Ndim)
+                    ENDIF
                 ENDIF
               endif
 
@@ -433,7 +426,7 @@ module upgrade_mod
         if (op_dim > 0) then
            deallocate ( Mat, Delta, u, v )
            deallocate ( y_v, xp_v, x_v )
-           if (allocated(Gblk)) deallocate ( Gblk, g_rows, g_cols )
+           deallocate ( Gblk, g_rows, g_cols )
         endif
 
         If ( str_to_upper(mode) == "FINAL" )  then

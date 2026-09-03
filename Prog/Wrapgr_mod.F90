@@ -72,7 +72,7 @@ Contains
     Implicit none
     Allocate (GR_ST(Ndim,Ndim,N_FL) )
   end Subroutine Wrapgr_alloc
-
+  
   Subroutine  Wrapgr_dealloc
     Implicit none
     deallocate ( GR_ST )
@@ -84,12 +84,23 @@ Contains
 !> @details
 !> Separate from Wrapgr_alloc, which main only calls when N_Global_tau > 0
 !> because GR_ST exists solely for the multi-flip restore. The panels instead
-!> serve the sequential vertex loop, which runs on every slice regardless, so
-!> this must be called unconditionally.
+!> serve the sequential vertex loop, so main calls this whenever that loop runs.
+!>
+!> Collective over Group_Comm: under "auto" the depth is resolved by timing on
+!> rank 0 alone and broadcast, so that the ranks sharing a node neither each
+!> hold the probe's Ndim**2 scratch nor contend for the memory system they are
+!> measuring. It also keeps one depth across the group rather than one per rank.
 !--------------------------------------------------------------------
   Subroutine Wrapgr_delay_alloc
+#ifdef MPI
+    Use mpi
+#endif
     Implicit none
     Integer :: n, nf, dmax
+#ifdef MPI
+    Integer :: k, irank_l, ierr
+    Character (Len=16) :: source
+#endif
     ! Widest wrap support in the model. Op%N, not Op%N_non_zero: the conjugation
     ! the panels have to follow touches all N rows.
     dmax = 1
@@ -98,6 +109,18 @@ Contains
           if (Op_V(n,nf)%N > dmax) dmax = Op_V(n,nf)%N
        enddo
     enddo
+#ifdef MPI
+    k      = 0
+    source = 'off'
+    call MPI_Comm_rank(Group_Comm, irank_l, ierr)
+    if (irank_l == 0) then
+       k      = delay_depth(Ndim)
+       source = delay_source
+    endif
+    call MPI_Bcast(k,      1,  MPI_INTEGER,   0, Group_Comm, ierr)
+    call MPI_Bcast(source, 16, MPI_CHARACTER, 0, Group_Comm, ierr)
+    call delay_set_depth(k, source)
+#endif
     call delay_alloc(Ndim, N_FL, dmax)
     ! delay_alloc has already resolved the depth, so this call is the cached
     ! value -- it does not re-run the probe.
@@ -153,7 +176,7 @@ Contains
     Do n = Nt_sequential_start,Nt_sequential_end
        Do nf_eff = 1, N_FL_eff
           nf=Calc_Fl_map(nf_eff)
-          HS_Field =  nsigma%f(n,ntau1)
+          HS_Field =  nsigma%f(n,ntau1) 
           N_type = 1
           Call Op_Wrapup(Gr(:,:,nf),Op_V(n,nf),HS_Field,Ndim,N_Type,ntau1)
           call delay_wrap(nf,Op_V(n,nf),HS_Field,N_Type,ntau1,'u')
@@ -187,7 +210,7 @@ Contains
     Enddo
     call delay_close(GR)
 
-    If ( N_Global_tau > 0 ) then
+    If ( N_Global_tau > 0 ) then 
        m         = Nt_sequential_end
        !if ( Nt_sequential_start >  Nt_sequential_end ) m = Nt_sequential_start
        Call Wrapgr_Random_update(GR,m,ntau1, PHASE, N_Global_tau )
@@ -242,7 +265,7 @@ Contains
     Do n =  Nt_sequential_end, Nt_sequential_start, -1
        N_type = 2
        nf = 1
-       HS_Field = nsigma%f(n,ntau)
+       HS_Field = nsigma%f(n,ntau) 
        do nf_eff = 1,N_FL_eff
           nf=Calc_Fl_map(nf_eff)
           Call Op_Wrapdo( Gr(:,:,nf), Op_V(n,nf), HS_Field, Ndim, N_Type,ntau)
@@ -272,7 +295,7 @@ Contains
        !Call Upgrade(GR,n,ntau,PHASE,Op_V(n,1)%N_non_zero) 
        ! The spin has changed after the upgrade!
        nf = 1
-       HS_Field = nsigma%f(n,ntau)
+       HS_Field = nsigma%f(n,ntau)  
        N_type = 1
        do nf_eff = 1,N_FL_eff
           nf=Calc_Fl_map(nf_eff)
@@ -314,13 +337,13 @@ Contains
     COMPLEX (Kind=Kind(0.d0)), Dimension(:,:,:), INTENT(INOUT), allocatable :: GR
     Integer, INTENT(IN) :: m,m1, ntau
 
-    !Local
-    Integer :: n, nf, nf_eff, N_Type
+    !Local 
+    Integer :: n, nf, nf_eff, N_Type 
     Complex (Kind=Kind(0.d0)) :: HS_Field
 
     call delay_assert_inactive('Wrapgr_PlaceGR')
 
-    If (m == m1)  then
+    If (m == m1)  then 
        return
     elseif  ( m1 > m  ) then
        !Write(6,*) "Wrapup from ",  m + 1, "to",  m1, " on tau=",  ntau
