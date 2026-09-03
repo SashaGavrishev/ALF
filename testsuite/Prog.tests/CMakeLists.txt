@@ -29,16 +29,24 @@ add_executable(24-udv 24-udv.F90)
 add_executable(25-assign-UDV-state 25-assign-UDV-state.F90)
 add_executable(26-Test-Polymorphic-Fortran 26-Test-Polymorphic-Fortran.F90)
 add_executable(27-Op-mmultL-m1.F90 27-Op-mmultL-m1.F90)
-add_executable(28-delayed-panels 28-delayed-panels.F90)
-add_executable(29-delayed-wrap 29-delayed-wrap.F90)
-add_executable(30-delayed-update 30-delayed-update.F90)
+add_executable(28-Op-validate 28-Op-validate.F90)
+add_executable(29-Op-validate-hermitian-fail 29-Op-validate-hermitian-fail.F90)
+add_executable(30-Op-validate-type-fail 30-Op-validate-type-fail.F90)
+add_executable(31-Op-validate-projector-fail 31-Op-validate-projector-fail.F90)
+add_executable(32-Op-validate-1x1-fail 32-Op-validate-1x1-fail.F90)
+add_executable(33-Op-equal 33-Op-equal.F90)
+add_executable(34-Op-V-symm-pass 34-Op-V-symm-pass.F90)
+add_executable(35-Op-V-symm-fail 35-Op-V-symm-fail.F90)
+add_executable(36-delayed-panels 36-delayed-panels.F90)
+add_executable(37-delayed-wrap 37-delayed-wrap.F90)
+add_executable(38-delayed-update 38-delayed-update.F90)
 # set(operatorparts 1-copy-sel-rows 2-copy-sel-columns 3-opmult 4-opmultct 5-FillExpOps 6-opexpmult-1 6-opexpmult-2 7-opexpmultct-1 7-opexpmultct-2 9-Op-Phase 10-Op-mmultL 11-Op-mmultR 13-Op-Wrapup 14-Op-Wrapdo 21-Op-make 22-sl-mat-mults)
-set(operatorparts 9-Op-Phase 10-Op-mmultL 11-Op-mmultR 13-Op-Wrapup 14-Op-Wrapdo 21-Op-make 22-sl-mat-mults 26-Test-Polymorphic-Fortran 27-Op-mmultL-m1.F90 29-delayed-wrap)
+set(operatorparts 9-Op-Phase 10-Op-mmultL 11-Op-mmultR 13-Op-Wrapup 14-Op-Wrapdo 21-Op-make 22-sl-mat-mults 26-Test-Polymorphic-Fortran 27-Op-mmultL-m1.F90 28-Op-validate 29-Op-validate-hermitian-fail 30-Op-validate-type-fail 31-Op-validate-projector-fail 32-Op-validate-1x1-fail 33-Op-equal 34-Op-V-symm-pass 35-Op-V-symm-fail 37-delayed-wrap)
 set(cgr2_2tests 16-get-blocks 17-solve-extended-system)
 #set(cgr2_1tests 8-scalematrix-1 8-scalematrix-2)
 set(cgr1tests 15-cgr 20-qdrp 23-cgrp)
 set(udvstatetests 18-ul-update-matrices 19-ur-update-matrices 24-udv 25-assign-UDV-state)
-set(delayedtests 28-delayed-panels 30-delayed-update)
+set(delayedtests 36-delayed-panels 38-delayed-update)
 set(progtests ${operatorparts} ${delayedtests} ${cgr1tests} ${cgr2_1tests} ${cgr2_2tests} ${udvstatetests})
 
 
@@ -48,10 +56,6 @@ endforeach(iter)
 
 foreach(iter ${delayedtests})
 target_link_libraries(${iter} ${CMAKE_CURRENT_SOURCE_DIR}/../../Prog/delayed_update_mod.o)
-# ALF_DELAY_VERIFY books its discrepancies through Control, so the module is no
-# longer free of it. Still far short of Hamiltonian_main, which is what would
-# drag most of ALF into this link.
-target_link_libraries(${iter} ${CMAKE_CURRENT_SOURCE_DIR}/../../Prog/control_mod.o)
 target_link_libraries(${iter} ${CMAKE_CURRENT_SOURCE_DIR}/../../Prog/Operator_mod.o ${CMAKE_CURRENT_SOURCE_DIR}/../../Prog/Fields_mod.o)
 endforeach(iter)
 
@@ -128,14 +132,28 @@ add_test(24-udv 24-udv)
 add_test(25-assign-UDV-state 25-assign-UDV-state)
 add_test(26-Test-Polymorphic-Fortran 26-Test-Polymorphic-Fortran)
 add_test(27-Op-mmultL-m1.F90 27-Op-mmultL-m1.F90)
-add_test(29-delayed-wrap 29-delayed-wrap)
+add_test(28-Op-validate 28-Op-validate)
+add_test(29-Op-validate-hermitian-fail 29-Op-validate-hermitian-fail)
+set_tests_properties(29-Op-validate-hermitian-fail PROPERTIES WILL_FAIL TRUE)
+add_test(30-Op-validate-type-fail 30-Op-validate-type-fail)
+set_tests_properties(30-Op-validate-type-fail PROPERTIES WILL_FAIL TRUE)
+add_test(31-Op-validate-projector-fail 31-Op-validate-projector-fail)
+set_tests_properties(31-Op-validate-projector-fail PROPERTIES WILL_FAIL TRUE)
+add_test(32-Op-validate-1x1-fail 32-Op-validate-1x1-fail)
+set_tests_properties(32-Op-validate-1x1-fail PROPERTIES WILL_FAIL TRUE)
+add_test(33-Op-equal 33-Op-equal)
+add_test(34-Op-V-symm-pass 34-Op-V-symm-pass)
+add_test(35-Op-V-symm-fail 35-Op-V-symm-fail)
+set_tests_properties(35-Op-V-symm-fail PROPERTIES WILL_FAIL TRUE)
 
-add_test(28-delayed-panels 28-delayed-panels)
+add_test(36-delayed-panels 36-delayed-panels)
 # delay_alloc is a no-op without this, and every assertion in the test would then
 # pass vacuously; the test checks the depth on entry and refuses if it is unset.
-set_tests_properties(28-delayed-panels PROPERTIES ENVIRONMENT "ALF_DELAY_K=8")
+set_tests_properties(36-delayed-panels PROPERTIES ENVIRONMENT "ALF_DELAY_K=8")
 
-add_test(30-delayed-update 30-delayed-update)
-# Same reason as 28, and the same depth: the test's step count is chosen against
+add_test(37-delayed-wrap 37-delayed-wrap)
+
+add_test(38-delayed-update 38-delayed-update)
+# Same reason as 36, and the same depth: the test's step count is chosen against
 # k = 8 so that every rank both flushes and ends holding a partial panel.
-set_tests_properties(30-delayed-update PROPERTIES ENVIRONMENT "ALF_DELAY_K=8")
+set_tests_properties(38-delayed-update PROPERTIES ENVIRONMENT "ALF_DELAY_K=8")

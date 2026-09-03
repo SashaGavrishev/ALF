@@ -160,10 +160,13 @@ Program Main
        
         Integer :: NBC, NSW
         Integer :: NTAU, NTAU1
-        Character (len=64) :: file_seeds, file_dat, file_info, file_git_info
+        Character (len=64) :: file_seeds, file_info, file_git_info
         Integer :: Seed_in
         Complex (Kind=Kind(0.d0)) , allocatable, dimension(:,:) :: Initial_field
 
+#ifdef HDF5
+        Character (len=64) :: file_dat
+#endif
 
 #ifdef HDF5
         INTEGER(HID_T) :: file_id
@@ -172,12 +175,16 @@ Program Main
          
         !General
         Integer :: NSTM, NT, NT1, NVAR
-        Integer :: Ierr, I,nf, nf_eff, nst, n, n1, N_op, NBin_eff
+        Integer :: I, nf, nf_eff, nst, n, n1, N_op, NBin_eff
         Integer :: tmp_Nt_sequential_start, tmp_Nt_sequential_end, tmp_N_Global_tau
         Logical :: Toggle,  Toggle1
         Complex (Kind=Kind(0.d0)) :: Phase, Z, Z1
         Real    (Kind=Kind(0.d0)) :: ZERO = 10D-8
         Real    (Kind=Kind(0.d0)) :: Mc_step_weight
+
+#if defined(MPI) || defined(HDF5)
+        Integer :: Ierr
+#endif
 
         ! Storage for  stabilization steps
         Integer, dimension(:), allocatable :: Stab_nt 
@@ -190,11 +197,10 @@ Program Main
         integer (kind=kind(0.d0)) :: count_bin_start, count_bin_end
         
         ! For MPI shared memory
+#ifdef MPI
         character(64), parameter :: name="ALF_SHM_CHUNK_SIZE_GB"
         character(64) :: chunk_size_str
         Real    (Kind=Kind(0.d0)) :: chunk_size_gb
-
-#ifdef MPI
         Integer        :: Isize, Irank, Irank_g, Isize_g, color, key, igroup
 
         CALL MPI_INIT(ierr)
@@ -315,6 +321,7 @@ Program Main
         Call Alloc_Ham(get_ham_name())
         leap_frog_bulk = .false.
         Call ham%Ham_set()
+        Call Validate_Ham_Variables()
         ! Test  if  user  has  specified  correct  array  size  for time dependent Hamiltonians
         N_op = Size(OP_V,1)
         do n = 1, N_op
@@ -362,10 +369,6 @@ Program Main
         Enddo
 
         if(Projector) then
-           if (.not. allocated(WF_R) .or. .not. allocated(WF_L)) then
-              write(error_unit,*) "Projector is selected but there are no trial wave functions!"
-              CALL Terminate_on_error(ERROR_HAMILTONIAN,__FILE__,__LINE__)
-           endif
            do nf_eff=1,N_fl_eff
               nf=Calc_Fl_map(nf_eff)
               if (.not. allocated(WF_R(nf)%P) .or. .not. allocated(WF_L(nf)%P)) then

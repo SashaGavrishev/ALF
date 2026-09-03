@@ -1,12 +1,12 @@
 ! The delayed update, composed, must track an immediate one exactly.
 !
-! Test 28 drives the panel accessors and test 29 drives the panel wrap, each in
-! isolation and each at the shapes this repository's Hamiltonians produce. What
-! neither covers is the two running *together*: a slice in which reads,
-! rank-d appends, flushes and vertex conjugations interleave, which is what
-! Wrapgr_mod actually does. Nor do they reach rank 3 and 4, or a non-diagonal
-! vertex -- every Op_V here has Op%diag = .true. and rank at most 2, so the
-! ZSLGEMM arms of the wrap have never been composed with an append at all.
+! Test 36 drives the panel accessors and test 37 drives the panel wrap, each in
+! isolation. What neither covers is the two running *together*: a slice in which
+! reads, rank-d appends, flushes and vertex conjugations interleave, which is
+! what Wrapgr_mod actually does. A Hamiltonian whose Op_V are all diagonal and
+! of rank at most 2 -- which is the common case -- never composes the wrap's
+! ZSLGEMM arms with an append at all, so this test drives ranks 1 to 4 and both
+! diagonalities explicitly.
 !
 ! The arms:
 !
@@ -17,7 +17,7 @@
 !
 ! Both see the same operators, fields, sides and updates in the same order, so
 ! they must agree: at every step through the accessors, and at delay_close on
-! the whole matrix. The wraps are what make this more than test 28 with a bigger
+! the whole matrix. The wraps are what make this more than test 36 with a bigger
 ! d -- the identity being checked is
 !
 !     L*(G_stale + X*Y^T)*R = (L*G_stale*R) + (L*X)*(R^T*Y)^T

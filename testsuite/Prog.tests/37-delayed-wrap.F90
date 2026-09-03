@@ -10,10 +10,10 @@
 ! must hold exactly, and Op_Wrap_panels is what applies L to X and R^T to Y.
 ! This test forms both sides and compares them.
 !
-! Why it exists rather than relying on a simulation: every vertex in the models
-! this change targets has Op%diag = .true., so a production run never reaches
-! the ZSLGEMM branches or the N_type = 2 branches at all. Half of
-! Op_Wrap_panels would otherwise be shipped untested. The sweep below covers
+! Why it exists rather than relying on a simulation: for a Hamiltonian whose
+! vertices all have Op%diag = .true. -- which is the common case -- a production
+! run never reaches the ZSLGEMM branches or the N_type = 2 branches at all. Half
+! of Op_Wrap_panels would otherwise be shipped untested. The sweep below covers
 ! every combination of type (1..4), rank (1..4), N_type (1,2), side (u,d),
 ! diagonality and time-dependent coupling, which is all sixteen branches of each
 ! wrap.
@@ -21,8 +21,8 @@
 ! g_t is an axis rather than a detail. When Op%g_t is allocated the wraps take
 ! the coupling from it per time slice and build the exponential on the spot,
 ! bypassing the E_Exp table the other arms read; Op_Wrap_panels mirrors that in
-! four more branches, and no Hamiltonian in this repository allocates g_t, so
-! without this axis they ship unexecuted. The value below is deliberately not
+! four more branches, which a Hamiltonian that never allocates g_t leaves
+! unexecuted. The value below is deliberately not
 ! Op%g: a panel arm that ignored g_t and read the table instead would otherwise
 ! agree with the reference for the wrong reason.
 !
