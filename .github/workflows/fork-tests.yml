@@ -34,12 +34,15 @@ jobs:
           }
 
   build_and_test:
-    name: GNU · noMPI · ${{ matrix.devel || 'plain' }} · HDF5
+    name: GNU · ${{ matrix.mode }} · ${{ matrix.devel || 'plain' }} · HDF5
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
       matrix:
-        # Devel adds -pedantic -Werror and -O0 -fcheck=all.
+        # MPI is the only configuration that compiles control_mod's MPI_REDUCE
+        # of the timers and acceptances. Devel adds -pedantic -Werror and
+        # -O0 -fcheck=all.
+        mode: [noMPI, MPI]
         devel: ["", "Devel"]
     steps:
       - uses: actions/checkout@v6
@@ -58,7 +61,8 @@ jobs:
         run: echo "version=$(gfortran -dumpversion)" >> "$GITHUB_OUTPUT"
 
       # Keyed on the compiler version: the Fortran module HDF5 installs is only
-      # readable by the compiler that built it.
+      # readable by the compiler that built it. The MPI legs build it with
+      # mpifort, hence the mode in the key.
       - name: Cache the HDF5 build
         uses: actions/cache@v5
         with:
@@ -67,40 +71,4 @@ jobs:
 
       - uses: ./.github/actions/alf_test
         with:
-          args: GNU noMPI ${{ matrix.devel }} HDF5
-
-  # Compile only. control_mod's MPI_REDUCE of the timers and acceptances exists
-  # only under -DMPI, and nothing else here compiles it. Not run, and not `make
-  # all`: Analysis does not link under MPI, because fourier_mod calls
-  # MaxEnt_stoch_fit and its definition is commented out upstream.
-  build_mpi:
-    name: GNU · MPI · ${{ matrix.devel || 'plain' }} · HDF5 (build only)
-    runs-on: ubuntu-latest
-    strategy:
-      fail-fast: false
-      matrix:
-        devel: ["", "Devel"]
-    steps:
-      - uses: actions/checkout@v6
-
-      - name: Install build dependencies
-        run: |
-          sudo apt-get update -qq
-          sudo apt-get install -y --no-install-recommends \
-            libblas-dev liblapack-dev libmpich-dev mpich
-
-      - name: Record compiler version
-        id: fc
-        run: echo "version=$(gfortran -dumpversion)" >> "$GITHUB_OUTPUT"
-
-      - name: Cache the HDF5 build
-        uses: actions/cache@v5
-        with:
-          key: linux-HDF5-gfortran-${{ steps.fc.outputs.version }}-MPI
-          path: HDF5/*/
-
-      - name: Build
-        shell: bash
-        run: |
-          . ./configure.sh GNU MPI ${{ matrix.devel }} HDF5 NO-INTERACTIVE
-          make program
+          args: GNU ${{ matrix.mode }} ${{ matrix.devel }} HDF5
