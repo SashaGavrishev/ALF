@@ -309,9 +309,16 @@ module upgrade_mod
            ! reports comparable with delayed_update.f90's speedup.
            update_calls  = update_calls + 1
            update_stride = update_sample_stride()
-           ! Kinds must match in MOD; update_calls is 64-bit against overflow.
-           update_timed  = update_stride > 0 .and. &
-                & mod(update_calls, Int(update_stride, Kind(0.d0))) == 0
+           ! Nested, not .and.: Fortran does not short-circuit, so a single
+           ! expression evaluates MOD even when the stride is zero -- which is
+           ! the default, the gate being off. Integer division by zero traps on
+           ! x86 and returns quietly on arm64, so it is fatal exactly where it
+           ! is not being tested. Kinds must match in MOD; update_calls is
+           ! 64-bit against overflow.
+           update_timed = .false.
+           if (update_stride > 0) then
+              update_timed = mod(update_calls, Int(update_stride, Kind(0.d0))) == 0
+           endif
            if (update_timed) call system_clock(update_c0)
 
            Do nf_eff = 1,N_FL_eff
