@@ -515,25 +515,27 @@ Module MaxEnt_stoch_mod
             endif
          end Subroutine Set_default_table
 
-!-------------------
-!         Subroutine MaxEnt_stoch_fit(XQMC, Xtau, COV, Lcov, XKER, Xmom1, Beta_1, Alpha_tot,&
-!                 & Ngamma_1, OM_ST, OM_EN, Nsweeps, NBins, NWarm, Aom_res,&
-!                 & xom_res, Chisq )
-!              
-!           Implicit None
-!           
-!           Real (Kind=Kind(0.d0)), Dimension(:) :: XQMC, Xtau, Alpha_tot, Aom_res, Xom_res
-!           Real (Kind=Kind(0.d0)), Dimension(:,:) :: COV
-!           Real (Kind=Kind(0.d0)), external :: XKER
-!           Real (Kind=Kind(0.d0)) :: CHISQ, OM_ST, OM_EN, Beta_1, Xmom1, Err
-!           Integer :: Nsweeps, NBins, Ngamma_1, nw, nt1, Lcov
+!--------------------------------------------------------------------------------------
+!>       @brief
+!>       Not implemented. Fourier's Tau_Matz_T_stoch and Tau_Matz_T0_stoch call it, so a
+!>       definition must exist to link; it terminates rather than return an empty spectrum.
+!--------------------------------------------------------------------------------------
+         Subroutine MaxEnt_stoch_fit(XQMC, Xtau, COV, Lcov, XKER, Xmom1, Beta_1, Alpha_tot,&
+                 & Ngamma_1, OM_ST, OM_EN, Nsweeps, NBins, NWarm, Aom_res,&
+                 & xom_res, Chisq )
 
-!           ! Reset the input data
-!           xqmc = XMOM1* xqmc
-!           cov = ((XMOM1)**2)* cov
-!         end Subroutine MaxEnt_stoch_fit
-!-------------------
- 
+           Implicit None
+
+           Real (Kind=Kind(0.d0)), Dimension(:) :: XQMC, Xtau, Alpha_tot, Aom_res, Xom_res
+           Real (Kind=Kind(0.d0)), Dimension(:,:) :: COV
+           Real (Kind=Kind(0.d0)), external :: XKER
+           Real (Kind=Kind(0.d0)) :: CHISQ, OM_ST, OM_EN, Beta_1, Xmom1
+           Integer :: Nsweeps, NBins, NWarm, Ngamma_1, Lcov
+
+           Call Terminate_on_error(ERROR_MAXENT,__FILE__,__LINE__)
+
+         end Subroutine MaxEnt_stoch_fit
+
 !--------------------------------------------------------------------------------------
 !        Uses   the  Phi_func  table  to   generate   
 !        Phi(om) =  (1/Xmom1) \int_{-inf}^{om} D(om).  Here  D(om) is  normalized to Xmom1
