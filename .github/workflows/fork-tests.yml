@@ -95,11 +95,13 @@ jobs:
     steps:
       - uses: actions/checkout@v6
 
-      # gfortran and cmake are preinstalled; the reference BLAS is not.
+      # gfortran and cmake are preinstalled; a BLAS is not. OpenBLAS rather than
+      # the netlib reference, which is slow enough at level 3 to dominate a job:
+      # ALF links -llapack -lblas and Debian's alternatives point both at it.
       - name: Install build dependencies
         run: |
           sudo apt-get update -qq
-          sudo apt-get install -y --no-install-recommends libblas-dev liblapack-dev
+          sudo apt-get install -y --no-install-recommends libopenblas-dev
 
       # Installs one MPI and puts its wrapper and launcher on PATH together.
       # apt-installing a second MPI beside the image's own leaves mpifort and
