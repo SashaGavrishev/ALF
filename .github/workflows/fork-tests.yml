@@ -2,7 +2,9 @@
 #
 # Runs what this fork builds -- GNU, HDF5, serial and MPI -- on a stock runner
 # with no container. ALF builds its own HDF5 either way, so dropping the
-# container costs only the apt line below.
+# container costs only the apt line below. The image is pinned rather than
+# `latest`: the Devel legs compile with -Werror, so a runner bumping gfortran
+# turns CI red with no commit behind it.
 name: "Fork tests"
 
 on:
@@ -14,6 +16,9 @@ on:
       - main
   workflow_dispatch:
 
+permissions:
+  contents: read
+
 concurrency:
   group: fork-tests-${{ github.ref }}
   cancel-in-progress: true
@@ -21,7 +26,8 @@ concurrency:
 jobs:
   lint_stopcommands:
     name: Lint Fortran STOP statements
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
     steps:
       - uses: actions/checkout@v6
       - name: Check for forbidden STOP/ERROR STOP
@@ -35,7 +41,8 @@ jobs:
 
   build_and_test:
     name: GNU · ${{ matrix.mode }} · ${{ matrix.devel || 'plain' }} · HDF5
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
     strategy:
       fail-fast: false
       matrix:
@@ -47,22 +54,30 @@ jobs:
     steps:
       - uses: actions/checkout@v6
 
-      # gfortran and cmake are preinstalled; the reference BLAS and MPICH are
-      # not. MPICH rather than OpenMPI: configure.sh's -fallow-argument-mismatch
-      # is there for it.
+      # gfortran and cmake are preinstalled; the reference BLAS is not.
       - name: Install build dependencies
         run: |
           sudo apt-get update -qq
-          sudo apt-get install -y --no-install-recommends \
-            libblas-dev liblapack-dev libmpich-dev mpich
+          sudo apt-get install -y --no-install-recommends libblas-dev liblapack-dev
+
+      # Installs one MPI and puts its wrapper and launcher on PATH together.
+      # apt-installing a second MPI beside the image's own leaves mpifort and
+      # mpiexec free to resolve to different ones, and the mismatch is silent:
+      # every rank initialises as a singleton rank 0.
+      - name: Set up MPI
+        if: matrix.mode == 'MPI'
+        uses: mpi4py/setup-mpi@v1
+        with:
+          mpi: openmpi
 
       - name: Record compiler version
         id: fc
-        run: echo "version=$(gfortran -dumpversion)" >> "$GITHUB_OUTPUT"
+        run: echo "version=$(gfortran -dumpfullversion)" >> "$GITHUB_OUTPUT"
 
-      # Keyed on the compiler version: the Fortran module HDF5 installs is only
-      # readable by the compiler that built it. The MPI legs build it with
-      # mpifort, hence the mode in the key.
+      # Keyed on the full compiler version: the Fortran module HDF5 installs is
+      # only readable by the compiler that built it, and the module format can
+      # change within a major release. The MPI legs build it with mpifort,
+      # hence the mode in the key.
       - name: Cache the HDF5 build
         uses: actions/cache@v5
         with:
