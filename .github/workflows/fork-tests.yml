@@ -31,6 +31,10 @@ env:
   # make reads this from the environment, which keeps it out of the shared
   # alf_test action.
   MAKEFLAGS: "-j4"
+  # OpenBLAS threads by default, and these runs are small enough that thread
+  # dispatch costs more than the kernels save. One thread also keeps the
+  # bitwise comparisons clear of thread-count nondeterminism.
+  OPENBLAS_NUM_THREADS: "1"
 
 jobs:
   # Which of the jobs below is worth running. Gating the jobs rather than the
