@@ -26,9 +26,6 @@
 !> output, the ALF_INSTRUMENT *macro* governs bitwise identity. Only the
 !> preprocessor can remove the near-tie hoist from the accept/reject line
 !> in upgrade_mod, which a runtime test cannot -- see CONSOLIDATION.md 3.4.
-!>
-!> ALF_GREEN_DUMP is deliberately outside this gate: it writes Ndim**2 per
-!> record and must never follow from a general "instrument me".
 !--------------------------------------------------------------------
 Module Instrument_mod
 
