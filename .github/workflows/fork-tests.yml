@@ -18,6 +18,9 @@ on:
 
 permissions:
   contents: read
+  # paths-filter reads the changed files from the API on pull_request events;
+  # on push it walks the git history and needs nothing.
+  pull-requests: read
 
 concurrency:
   group: fork-tests-${{ github.ref }}
@@ -30,8 +33,38 @@ env:
   MAKEFLAGS: "-j4"
 
 jobs:
+  # Which of the jobs below is worth running. Gating the jobs rather than the
+  # workflow keeps them reporting: a job skipped by `if:` still posts a status,
+  # where a workflow filtered out by `on: paths:` posts nothing at all and would
+  # leave a required check waiting on a run that never starts.
+  changes:
+    name: Detect what changed
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    outputs:
+      fortran: ${{ steps.filter.outputs.fortran }}
+    steps:
+      - uses: actions/checkout@v6
+      - uses: dorny/paths-filter@ceb8a2b8f2d89434be7ff52d3de7ec3738c5cc9d # v4.0.3
+        id: filter
+        with:
+          filters: |
+            fortran:
+              - '**/*.F90'
+              - '**/*.f90'
+              - '**/*.f'
+              - '**/Makefile'
+              - 'configure.sh'
+              - 'Prog/**'
+              - 'Libraries/**'
+              - 'testsuite/**'
+              - '.github/workflows/fork-tests.yml'
+              - '.github/actions/alf_test/**'
+
   lint_stopcommands:
     name: Lint Fortran STOP statements
+    needs: changes
+    if: needs.changes.outputs.fortran == 'true'
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     steps:
@@ -47,6 +80,8 @@ jobs:
 
   build_and_test:
     name: GNU · ${{ matrix.mode }} · ${{ matrix.devel || 'plain' }} · HDF5
+    needs: changes
+    if: needs.changes.outputs.fortran == 'true'
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     strategy:
