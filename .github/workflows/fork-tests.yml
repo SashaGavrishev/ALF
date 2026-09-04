@@ -1,0 +1,73 @@
+# Fork-only CI, beside upstream's tests.yml rather than replacing it.
+#
+# Runs what this fork builds -- GNU, HDF5, serial and MPI -- on a stock runner
+# with no container. ALF builds its own HDF5 either way, so dropping the
+# container costs only the apt line below.
+name: "Fork tests"
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+  workflow_dispatch:
+
+concurrency:
+  group: fork-tests-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  lint_stopcommands:
+    name: Lint Fortran STOP statements
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - name: Check for forbidden STOP/ERROR STOP
+        run: |
+          set -euo pipefail
+          ! grep -irn -e "^\s*error\s*stop" -e "^\s*stop" --include="*.F90" \
+            --exclude-dir=Analysis --exclude-dir=HDF5 --exclude-dir=testsuite \
+            --exclude-dir=Not_supported --exclude="runtime_error_mod.F90" || {
+            echo "STOP/ERROR STOP found."; exit 1;
+          }
+
+  build_and_test:
+    name: GNU · ${{ matrix.mode }} · ${{ matrix.devel || 'plain' }} · HDF5
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # MPI is not what the campaign runs, but control_mod's MPI_REDUCE of the
+        # timers and acceptances compiles only there.
+        mode: [noMPI, MPI]
+        # Devel adds -pedantic -Werror and -O0 -fcheck=all.
+        devel: ["", "Devel"]
+    steps:
+      - uses: actions/checkout@v6
+
+      # gfortran and cmake are preinstalled; the reference BLAS and MPICH are
+      # not. MPICH rather than OpenMPI: configure.sh's -fallow-argument-mismatch
+      # is there for it.
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends \
+            libblas-dev liblapack-dev libmpich-dev mpich
+
+      - name: Record compiler version
+        id: fc
+        run: echo "version=$(gfortran -dumpversion)" >> "$GITHUB_OUTPUT"
+
+      # Keyed on the compiler version: the Fortran module HDF5 installs is only
+      # readable by the compiler that built it.
+      - name: Cache the HDF5 build
+        uses: actions/cache@v5
+        with:
+          key: linux-HDF5-gfortran-${{ steps.fc.outputs.version }}-${{ matrix.mode }}
+          path: HDF5/*/
+
+      - uses: ./.github/actions/alf_test
+        with:
+          args: GNU ${{ matrix.mode }} ${{ matrix.devel }} HDF5

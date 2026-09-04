@@ -561,6 +561,22 @@ module Control
         X = 0.d0
         CALL MPI_REDUCE(ACC_eff,X,1,MPI_REAL8,MPI_SUM, 0,Group_Comm,IERR)
         ACC_eff = X/dble(Isize_g)
+        ! Means, as for Time and the acceptances: every rank does the same
+        ! amount of this work, so a mean describes any one of them. The counts
+        ! stay rank-local, since a summed count beside a mean time would not
+        ! reconstruct anything.
+        X = 0.d0
+        CALL MPI_REDUCE(Update_time,X,1,MPI_REAL8,MPI_SUM, 0,Group_Comm,IERR)
+        Update_time = X/dble(Isize_g)
+        X = 0.d0
+        CALL MPI_REDUCE(Update_share,X,1,MPI_REAL8,MPI_SUM, 0,Group_Comm,IERR)
+        Update_share = X/dble(Isize_g)
+        X = 0.d0
+        CALL MPI_REDUCE(Hop_time,X,1,MPI_REAL8,MPI_SUM, 0,Group_Comm,IERR)
+        Hop_time = X/dble(Isize_g)
+        X = 0.d0
+        CALL MPI_REDUCE(Hop_share,X,1,MPI_REAL8,MPI_SUM, 0,Group_Comm,IERR)
+        Hop_share = X/dble(Isize_g)
         X = 0.d0
         CALL MPI_REDUCE(ACC_Glob,X,1,MPI_REAL8,MPI_SUM, 0,Group_Comm,IERR)
         ACC_Glob = X/dble(Isize_g)

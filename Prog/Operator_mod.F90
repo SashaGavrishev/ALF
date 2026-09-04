@@ -980,7 +980,7 @@ Contains
 !>
 !> This mirrors sixteen branches of Op_Wrapup/Op_Wrapdo and will silently diverge
 !> if either is edited. It lives beside them for that reason, and testsuite test
-!> 29-delayed-wrap is the guard.
+!> 37-delayed-wrap is the guard.
 !>
 !> @param[inout] Xpan(Ndim,ncols), Ypan(Ndim,ncols) The panels.
 !> @param[in] updo 'u' to mirror Op_Wrapup, 'd' to mirror Op_Wrapdo.
