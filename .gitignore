@@ -33,3 +33,8 @@ Prog/.parse_parameters
 
 # JxJx DFTI module built from MKL sources by configure.sh
 .alf-dfti/
+
+# Build-configuration stamp written by the superproject's `alf` target. The
+# ignore has to live here: a superproject .gitignore does not reach inside a
+# submodule's own work tree.
+.alf-build-config
